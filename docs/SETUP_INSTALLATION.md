@@ -25,8 +25,8 @@ This guide provides step-by-step instructions to install, build, and verify the 
 
 ### Clone & Enter Repository
 ```bash
-git clone https://github.com/<your-team>/drdo_lidar_mapping.git
-cd drdo_lidar_mapping
+git clone https://github.com/pushpam2404/sih_053.git
+cd sih_053
 ```
 
 ### Create Python Virtual Environment

@@ -135,8 +135,8 @@ All metrics measured on **NVIDIA Jetson AGX Orin (64GB)** under MAXN power mode:
 
 ### Step 1: Clone Repository
 ```bash
-git clone https://github.com/<your-team>/drdo_lidar_mapping.git
-cd drdo_lidar_mapping
+git clone https://github.com/pushpam2404/sih_053.git
+cd sih_053
 ```
 
 ### Step 2: Set Up Python Environment
@@ -349,7 +349,7 @@ git add .
 git commit -m "feat: complete production architecture for DRDO ID26053"
 
 # Push to your remote GitHub repository
-git remote add origin https://github.com/<your-team>/drdo_lidar_mapping.git
+git remote add origin https://github.com/pushpam2404/sih_053.git
 git branch -M main
 git push -u origin main
 ```
