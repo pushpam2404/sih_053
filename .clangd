@@ -1,9 +1,7 @@
 CompileFlags:
-  CompilationDatabase: /Users/pushpam/Desktop/sih
+  CompilationDatabase: build
   Add:
     - -std=c++17
-    - -I/Users/pushpam/Desktop/sih/phase2/include
-    - -I/Users/pushpam/Desktop/sih/phase3/include
-    - -I/Users/pushpam/Desktop/sih/phase3/ros2/include_stubs
+    - -I/Users/pushpam/Desktop/sih/include
     - -I/Users/pushpam/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/include/python3.11
     - -I/Users/pushpam/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/site-packages/pybind11/include

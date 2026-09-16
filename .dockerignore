@@ -1,0 +1,16 @@
+# Keep the Jetson build context small and reproducible
+.git
+.vscode
+.cache
+.agents
+archive
+build
+**/build
+**/install
+**/log
+**/__pycache__
+*.engine
+data/rellis/**/*.bin
+data/rellis/**/*.label
+lib/*.so
+compile_commands.json

@@ -1,4 +1,3 @@
-# phase3/python/kitti_replay.py
 """
 SemanticKITTI offline bag replay driver for DRDO ID26053.
 Usage:
@@ -6,11 +5,12 @@ Usage:
     python3 kitti_replay.py            # synthetic mode — no data needed
 """
 import sys, os
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import numpy as np
-sys.path.insert(0, "../lib")
-sys.path.insert(0, ".")
+sys.path.insert(0, os.path.join(REPO_ROOT, "lib"))
+sys.path.insert(0, REPO_ROOT)
 import drdo_map
-from mink_inference import MinkUNetInference
+from drdo_lidar_mapping.inference.mink_inference import MinkUNetInference
 
 KITTI_TO_DRDO = {40:0, 44:0, 48:1, 70:3, 71:4, 72:2, 80:4, 81:4, 252:4}
 

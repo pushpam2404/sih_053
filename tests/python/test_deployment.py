@@ -92,7 +92,7 @@ def check_4_tensorrt_pipeline() -> None:
     assert "trtexec" in script_content, "compile_trt.sh missing trtexec command"
 
     from drdo_lidar_mapping.inference.trt_runner import TrtInferenceRunner
-    runner = TrtInferenceRunner(engine_path="dummy_nonexistent.engine")
+    runner = TrtInferenceRunner(engine_path="dummy_nonexistent.engine", allow_stub=True)
     dummy_points = np.random.randn(2048, 4).astype(np.float32)
     out_logits = runner.infer(dummy_points)
     assert out_logits.shape == (2048, 8), f"Unexpected output shape: {out_logits.shape}"

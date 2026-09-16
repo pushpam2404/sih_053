@@ -31,8 +31,14 @@ class MinkUNet18Scaffold(nn.Module):
         """
         return self.net(x)
 
-def build_minkunet(in_channels: int = 4, num_classes: int = 8, weights_path: str = None) -> nn.Module:
-    """Instantiate MinkUNet18 with optional checkpoint loading."""
+def build_minkunet(in_channels: int = 4, num_classes: int = 8, weights_path: str = None,
+                   strict: bool = True) -> nn.Module:
+    """Instantiate MinkUNet18 with optional checkpoint loading.
+
+    strict=True (default) raises if the checkpoint does not match the architecture. The previous
+    strict=False silently loaded zero tensors from models/minkunet18_drdo_ep30.pth (6 missing,
+    4 unexpected keys) and returned a randomly initialised network.
+    """
     try:
         from torchsparse.models import MinkUNet18
         model = MinkUNet18(in_channels=in_channels, num_classes=num_classes)
@@ -41,9 +47,25 @@ def build_minkunet(in_channels: int = 4, num_classes: int = 8, weights_path: str
 
     if weights_path:
         checkpoint = torch.load(weights_path, map_location="cpu")
-        if "model_state_dict" in checkpoint:
-            model.load_state_dict(checkpoint["model_state_dict"], strict=False)
-        else:
-            model.load_state_dict(checkpoint, strict=False)
+        state = checkpoint.get("model_state_dict", checkpoint)
+        result = model.load_state_dict(state, strict=False)
+        loaded = len(state) - len(result.unexpected_keys)
+        if strict and (result.missing_keys or result.unexpected_keys):
+            raise RuntimeError(
+                f"Checkpoint {weights_path} does not match {type(model).__name__}: "
+                f"{len(result.missing_keys)} missing, {len(result.unexpected_keys)} unexpected keys "
+                f"({loaded} tensors loaded). Use load_legacy_mlp() for the 2-layer host MLP checkpoint.")
 
     return model
+
+
+def load_legacy_mlp(weights_path: str, in_channels: int = 4, num_classes: int = 8) -> nn.Module:
+    """Load the checkpoint actually produced by scripts/train.py on hosts without TorchSparse++:
+    a per-point Linear(4,64)-ReLU-Linear(64,8) MLP over raw (x, y, z, intensity). This is NOT a
+    sparse-convolutional MinkUNet — it has no spatial context at all."""
+    checkpoint = torch.load(weights_path, map_location="cpu")
+    state = checkpoint.get("model_state_dict", checkpoint)
+    hidden = state["0.weight"].shape[0]
+    model = nn.Sequential(nn.Linear(in_channels, hidden), nn.ReLU(), nn.Linear(hidden, num_classes))
+    model.load_state_dict(state, strict=True)
+    return model.eval()

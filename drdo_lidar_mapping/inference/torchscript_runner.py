@@ -5,6 +5,7 @@ Exports the trained segmentation model to TorchScript (.pt) for high-frequency C
 """
 
 import os
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 import sys
 import time
 import numpy as np
@@ -12,8 +13,8 @@ import torch
 import torch.nn as nn
 
 NUM_CLASSES = 8
-OUTPUT_DIR = os.path.expanduser("~/Desktop/sih/phase5/models")
-CHECKPOINT_PATH = os.path.expanduser("~/Desktop/sih/phase4/data/weights/minkunet18_drdo_ep30.pth")
+OUTPUT_DIR = os.path.join(REPO_ROOT, "models")
+CHECKPOINT_PATH = os.path.join(REPO_ROOT, "models", "minkunet18_drdo_ep30.pth")
 EXPORT_PATH = os.path.join(OUTPUT_DIR, "minkunet18_traced.pt")
 
 

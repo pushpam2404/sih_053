@@ -6,7 +6,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/Map
       Name: DRDO 2.5D Costmap
       Topic:
-        Value: /drdo/costmap
+        Value: /map
       Color Scheme: costmap
       Alpha: 0.75
       Draw Under: false

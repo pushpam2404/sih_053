@@ -14,12 +14,14 @@ try:
 except ImportError:
     SKLEARN_AVAILABLE = False
 
-# Class Taxonomy
-CLASS_FREE = 0
-CLASS_TRAVERSABLE = 1
-CLASS_OBSTACLE_SOFT = 2
-CLASS_OBSTACLE_HARD = 3
-CLASS_UNKNOWN = 4
+# Class taxonomy — aligned to the ADL-1 8-class scheme used by the segmentation remap and the
+# C++ map engine. The previous private 5-class table set OBSTACLE_HARD = 3, which is
+# VEGETATION_DENSE in ADL-1: the tracker clustered bushes and ignored rocks and vehicles.
+CLASS_FREE = 0            # GROUND
+CLASS_TRAVERSABLE = 1     # GRAVEL_DIRT
+CLASS_OBSTACLE_SOFT = 3   # VEGETATION_DENSE
+CLASS_OBSTACLE_HARD = 4   # OBSTACLE_HARD
+CLASS_UNKNOWN = 6         # UNKNOWN
 
 
 @dataclass

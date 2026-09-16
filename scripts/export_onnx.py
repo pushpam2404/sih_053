@@ -6,6 +6,7 @@ Prepares the model for TensorRT FP16 engine compilation on NVIDIA Jetson AGX Ori
 """
 
 import os
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import sys
 from typing import Dict, Any
 
@@ -25,8 +26,8 @@ import torch
 import torch.nn as nn
 
 NUM_CLASSES = 8
-OUTPUT_DIR = os.path.expanduser("~/Desktop/sih/phase6/tensorrt")
-CHECKPOINT_PATH = os.path.expanduser("~/Desktop/sih/phase4/data/weights/minkunet18_drdo_ep30.pth")
+OUTPUT_DIR = os.path.join(REPO_ROOT, "models")
+CHECKPOINT_PATH = os.path.join(REPO_ROOT, "models", "minkunet18_drdo_ep30.pth")
 ONNX_PATH = os.path.join(OUTPUT_DIR, "minkunet18_drdo.onnx")
 
 

@@ -6,6 +6,7 @@ Includes host-side CPU fallback stub for platforms without TensorRT/CUDA.
 """
 
 import os
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 import time
 from typing import Optional
 import numpy as np
@@ -25,11 +26,16 @@ class TrtInferenceRunner:
     Manages loading and executing a serialized TensorRT engine for 3D point cloud semantic segmentation.
     Supports dynamic batch sizes up to 131,072 points per frame.
     """
-    def __init__(self, engine_path: str) -> None:
+    MAX_POINTS = 131072   # matches --maxShapes in deploy/tensorrt/compile_trt.sh
+
+    def __init__(self, engine_path: str, allow_stub: bool = False) -> None:
         """
         Initializes the TensorRT inference runner.
         Args:
             engine_path: Filepath to the serialized .engine file.
+            allow_stub: Use the z-threshold CPU stub when TensorRT or the engine is missing.
+                Default False: previously a missing engine on the vehicle silently produced fake
+                "obstacle if z > 1 m" logits.
         """
         self.engine_path: str = os.path.expanduser(engine_path)
         self.num_classes: int = 8
@@ -41,10 +47,22 @@ class TrtInferenceRunner:
             self.logger = trt.Logger(trt.Logger.WARNING)
             with open(self.engine_path, "rb") as f, trt.Runtime(self.logger) as runtime:
                 self.engine = runtime.deserialize_cuda_engine(f.read())
+            if self.engine is None:
+                raise RuntimeError(f"TensorRT failed to deserialize {self.engine_path} (built for another TRT/GPU?)")
             self.context = self.engine.create_execution_context()
+            # Allocate once for the max profile. Per-frame cuda.mem_alloc + pageable numpy copies
+            # fragment memory and add avoidable latency; page-locked buffers make the async copies real.
+            self.stream = cuda.Stream()
+            self.h_input = cuda.pagelocked_empty((self.MAX_POINTS, self.in_channels), dtype=np.float32)
+            self.h_output = cuda.pagelocked_empty((self.MAX_POINTS, self.num_classes), dtype=np.float32)
+            self.d_input = cuda.mem_alloc(self.h_input.nbytes)
+            self.d_output = cuda.mem_alloc(self.h_output.nbytes)
             print("[TRT] Engine deserialized successfully.")
+        elif allow_stub:
+            print("[WARN] TensorRT engine unavailable — using CPU STUB (fake logits, not a model)")
         else:
-            print("[WARN] TensorRT not available, using CPU stub")
+            reason = "tensorrt/pycuda not importable" if not TRT_AVAILABLE else f"engine not found: {self.engine_path}"
+            raise RuntimeError(f"[TRT] Cannot run inference: {reason}. Pass allow_stub=True for host tests only.")
 
     def infer(self, feats: np.ndarray) -> np.ndarray:
         """
@@ -67,34 +85,28 @@ class TrtInferenceRunner:
             logits[:, 4] = np.where(feats[:, 2] > 1.0, 3.5, -1.0)  # Obstacle if z > 1.0m
             return logits
 
-        # Native TensorRT execution path on Jetson
-        # Set dynamic shape for binding 0 ('feats')
+        if n_points > self.MAX_POINTS:
+            raise ValueError(f"{n_points} points exceeds the engine max profile ({self.MAX_POINTS})")
+
+        # Native TensorRT execution path on Jetson (TensorRT 8.x binding API: binding 0 = feats,
+        # binding 1 = logits). TensorRT 10 removed this API — port to set_input_shape/execute_async_v3.
         self.context.set_binding_shape(0, (n_points, self.in_channels))
-        
-        # Allocate device memory
-        d_input = cuda.mem_alloc(feats.nbytes)
-        out_bytes = n_points * self.num_classes * np.dtype(np.float32).itemsize
-        d_output = cuda.mem_alloc(out_bytes)
-        bindings = [int(d_input), int(d_output)]
-        
-        # Transfer input data to GPU
-        cuda.memcpy_htod(d_input, np.ascontiguousarray(feats, dtype=np.float32))
-        
-        # Execute asynchronous context
-        stream = cuda.Stream()
-        self.context.execute_async_v2(bindings=bindings, stream_handle=stream.handle)
-        
-        # Transfer output data back to host
-        out_logits = np.empty((n_points, self.num_classes), dtype=np.float32)
-        cuda.memcpy_dtoh_async(out_logits, d_output, stream)
-        stream.synchronize()
-        
-        return out_logits
+        in_view = self.h_input[:n_points]
+        out_view = self.h_output[:n_points]
+        np.copyto(in_view, feats, casting="same_kind")
+        cuda.memcpy_htod_async(self.d_input, in_view, self.stream)
+        ok = self.context.execute_async_v2(bindings=[int(self.d_input), int(self.d_output)],
+                                           stream_handle=self.stream.handle)
+        cuda.memcpy_dtoh_async(out_view, self.d_output, self.stream)
+        self.stream.synchronize()
+        if not ok:
+            raise RuntimeError("[TRT] execute_async_v2 failed")
+        return out_view.copy()
 
 
 def main() -> None:
     """Benchmark and validate TrtInferenceRunner."""
-    default_engine = os.path.expanduser("~/Desktop/sih/phase6/tensorrt/minkunet18_drdo_fp16.engine")
+    default_engine = os.path.join(REPO_ROOT, "models", "minkunet18_drdo_fp16.engine")
     runner = TrtInferenceRunner(engine_path=default_engine)
 
     n_test = 2048

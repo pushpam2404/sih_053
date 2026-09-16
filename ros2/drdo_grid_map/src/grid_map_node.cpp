@@ -1,275 +1,206 @@
-// phase3/ros2/drdo_grid_map/src/grid_map_node.cpp
+// ros2/drdo_grid_map/src/grid_map_node.cpp
+//
+// Foveated 2.5D grid map node. Engine logic lives in src/drdo_map.cpp (linked, not copy-pasted);
+// all node wiring is in main() with lambdas.
+//
+// Topics (relative names so launch-file remappings apply):
+//   sub  pointcloud      sensor_msgs/PointCloud2   (e.g. FAST-LIO2 /cloud_registered, any frame)
+//   pub  occupancy_grid  nav_msgs/OccupancyGrid    (transient_local: Nav2 StaticLayer requires it)
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/point_field.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
-#include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2/time.h>
+#include <tf2/exceptions.h>
 #include <cstring>
 #include <cmath>
 #include <chrono>
-#include "drdo_map.h"
+#include <string>
+#include <algorithm>
+#include "drdo_lidar_mapping/drdo_map.h"
 
 using namespace std;
-using namespace std::chrono_literals;
-
-// ── Static free functions (wrap Phase 1+2 lambdas) ───────────────────────────
-
-static int spatial_hash_fn(int32_t ix, int32_t iy, uint8_t level) {
-    uint64_t h = (uint64_t)(uint32_t)ix  * 2654435761ULL;
-    h ^= (uint64_t)(uint32_t)iy * 805459861ULL;
-    h ^= (uint64_t)level        * 1234567891ULL;
-    return (int)(h % (uint64_t)HASH_TABLE_SIZE);
-}
-
-static int insert_cell_fn(int32_t ix, int32_t iy, uint8_t level) {
-    int bucket = spatial_hash_fn(ix, iy, level);
-    for (int probe = 0; probe < MAX_PROBE; probe++) {
-        int slot = (bucket + probe) % HASH_TABLE_SIZE;
-        GridCell& c = g_hash_pool[slot];
-        if (c.valid && c.ix == ix && c.iy == iy && c.level == level) return slot;
-        if (!c.valid) {
-            c.h_min = +1e9f; c.h_max = -1e9f;
-            c.h_mean = 0.0f; c.h_variance_M2 = 0.0f;
-            c.traversability = 0.4f; c.hit_count = 0;
-            c.last_update_ts = 0; c.semantic_label = 6;
-            c.obstacle_flag = 2; c.ix = ix; c.iy = iy;
-            c.level = level; c.valid = true;
-            return slot;
-        }
-    }
-    return -1;
-}
-
-static GridCell* lookup_cell_fn(int32_t ix, int32_t iy, uint8_t level) {
-    int bucket = spatial_hash_fn(ix, iy, level);
-    for (int probe = 0; probe < MAX_PROBE; probe++) {
-        int slot = (bucket + probe) % HASH_TABLE_SIZE;
-        GridCell& c = g_hash_pool[slot];
-        if (!c.valid) return nullptr;
-        if (c.ix == ix && c.iy == iy && c.level == level) return &c;
-    }
-    return nullptr;
-}
-
-static ResolvedCell resolve_resolution_fn(float wx, float wy, float rx, float ry) {
-    float dx = wx-rx, dy = wy-ry, dist = sqrtf(dx*dx + dy*dy);
-    ResolvedCell r; r.discard = false;
-    if      (dist <=  5.0f) { r.level = 0; r.cell_size = 0.05f; }
-    else if (dist <  20.0f) { r.level = 1; r.cell_size = 0.20f; }
-    else if (dist <  50.0f) { r.level = 2; r.cell_size = 0.50f; }
-    else if (dist <= 100.0f){ r.level = 3; r.cell_size = 1.00f; }
-    else                    { r.discard = true; return r; }
-    r.ix = (int32_t)floorf(wx / r.cell_size);
-    r.iy = (int32_t)floorf(wy / r.cell_size);
-    return r;
-}
-
-static void update_height_fn(GridCell& c, float z) {
-    c.hit_count++;
-    float delta = z - c.h_mean;
-    c.h_mean += delta / (float)c.hit_count;
-    c.h_variance_M2 += delta * (z - c.h_mean);
-    if (z < c.h_min) c.h_min = z;
-    if (z > c.h_max) c.h_max = z;
-}
-
-static void mark_free_cell_fn(int32_t ix, int32_t iy, uint8_t level) {
-    int slot = insert_cell_fn(ix, iy, level);
-    if (slot < 0) return;
-    GridCell& c = g_hash_pool[slot];
-    if (c.obstacle_flag == 1) c.obstacle_flag = 2;
-    if (c.obstacle_flag == 2 && c.hit_count == 0) c.obstacle_flag = 0;
-}
-
-static void raycast_fn(int32_t ox, int32_t oy, int32_t hx, int32_t hy, uint8_t lv) {
-    int dx = abs(hx-ox), dy = abs(hy-oy);
-    int sx = (hx>ox)?1:-1, sy = (hy>oy)?1:-1, err = dx-dy, x=ox, y=oy;
-    while (true) {
-        if (x==hx && y==hy) break;
-        mark_free_cell_fn((int32_t)x, (int32_t)y, lv);
-        int e2 = 2*err;
-        if (e2>-dy) { err-=dy; x+=sx; }
-        if (e2< dx) { err+=dx; y+=sy; }
-    }
-}
-
-static const float SEM_TRAV_TABLE[8] = {1.0f,0.8f,0.65f,0.15f,0.0f,0.0f,0.4f,-1.0f};
-
-static void classify_obstacle_fn(GridCell& c, float gz) {
-    if (c.hit_count == 0) return;
-    float hs = c.h_max-c.h_min, cl = c.h_min-gz, ma = c.h_max-gz;
-    if      (hs < 0.05f) c.obstacle_flag = 0;
-    else if (cl > 0.50f) c.obstacle_flag = 0;
-    else if (ma > 0.30f) c.obstacle_flag = 1;
-    else                 c.obstacle_flag = 2;
-}
-
-static void compute_traversability_fn(GridCell& c) {
-    if (c.obstacle_flag == 1) { c.traversability = 0.0f; return; }
-    float rough = (c.hit_count>1) ? sqrtf(c.h_variance_M2/(float)(c.hit_count-1)) : 0.0f;
-    float hs    = expf(-5.0f * rough);
-    float ss    = SEM_TRAV_TABLE[c.semantic_label];
-    float conf  = fminf((float)c.hit_count / 10.0f, 1.0f);
-    c.traversability = conf * (0.5f * hs + 0.5f * ss);
-}
-
-class GridMapNode : public rclcpp::Node {
-public:
-    GridMapNode()
-        : Node("drdo_grid_map_node"),
-          tf_buffer_(get_clock()),
-          tf_listener_(tf_buffer_) {
-        memset(g_hash_pool, 0, sizeof(g_hash_pool));
-        RCLCPP_INFO(get_logger(), "[DRDO] Hash pool init (40MB). Waiting for LiDAR...");
-
-        pc_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-            "/lidar/points_raw", rclcpp::SensorDataQoS(),
-            std::bind(&GridMapNode::on_pointcloud, this, std::placeholders::_1));
-
-        costmap_pub_ = create_publisher<nav_msgs::msg::OccupancyGrid>("/drdo/costmap", 10);
-
-        publish_timer_ = create_wall_timer(
-            100ms, std::bind(&GridMapNode::publish_costmap, this));
-
-        frame_ts_ = 0;
-    }
-
-private:
-    void on_pointcloud(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
-        frame_ts_++;
-
-        // Get robot pose from TF
-        float robot_x = 0.0f, robot_y = 0.0f;
-        try {
-            auto tf = tf_buffer_.lookupTransform("map", "base_link", tf2::TimePointZero);
-            robot_x = (float)tf.transform.translation.x;
-            robot_y = (float)tf.transform.translation.y;
-        } catch (const tf2::TransformException& ex) {
-            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-                "[DRDO] TF failed: %s — using (0,0)", ex.what());
-        }
-
-        // Parse PointCloud2 field offsets
-        int off_x=-1, off_y=-1, off_z=-1, off_label=-1;
-        for (const auto& f : msg->fields) {
-            if (f.name=="x")     off_x     = f.offset;
-            if (f.name=="y")     off_y     = f.offset;
-            if (f.name=="z")     off_z     = f.offset;
-            if (f.name=="label") off_label = f.offset;
-        }
-        if (off_x<0||off_y<0||off_z<0) {
-            RCLCPP_ERROR_ONCE(get_logger(), "[DRDO] PointCloud2 missing x/y/z!");
-            return;
-        }
-
-        const uint8_t* data = msg->data.data();
-        uint32_t step = msg->point_step;
-        uint32_t N    = msg->width * msg->height;
-        int inserted = 0;
-
-        for (uint32_t i = 0; i < N; i++) {
-            const uint8_t* pt = data + i*step;
-            float wx, wy, wz;
-            memcpy(&wx, pt+off_x, 4);
-            memcpy(&wy, pt+off_y, 4);
-            memcpy(&wz, pt+off_z, 4);
-
-            uint8_t label = 6;  // UNKNOWN default
-            if (off_label >= 0) {
-                uint8_t rl; memcpy(&rl, pt+off_label, 1);
-                label = (rl < 8) ? rl : 6;
-            }
-
-            if (label==7 || wz>15.0f || wz<-2.0f) continue;
-
-            ResolvedCell rc = resolve_resolution_fn(wx, wy, robot_x, robot_y);
-            if (rc.discard) continue;
-
-            int32_t rox = (int32_t)floorf(robot_x / rc.cell_size);
-            int32_t roy = (int32_t)floorf(robot_y / rc.cell_size);
-            raycast_fn(rox, roy, rc.ix, rc.iy, (uint8_t)rc.level);
-
-            int slot = insert_cell_fn(rc.ix, rc.iy, (uint8_t)rc.level);
-            if (slot < 0) continue;
-            GridCell& c = g_hash_pool[slot];
-            update_height_fn(c, wz);
-            c.semantic_label = label;
-            c.last_update_ts = frame_ts_;
-            inserted++;
-        }
-
-        // Classify + score all valid cells
-        for (int i = 0; i < HASH_TABLE_SIZE; i++) {
-            if (!g_hash_pool[i].valid) continue;
-            classify_obstacle_fn(g_hash_pool[i], 0.0f);
-            compute_traversability_fn(g_hash_pool[i]);
-        }
-
-        // Temporal decay every DECAY_K frames
-        if (frame_ts_ % DECAY_K == 0) {
-            int decayed = 0;
-            for (int i = 0; i < HASH_TABLE_SIZE; i++) {
-                GridCell& c = g_hash_pool[i];
-                if (!c.valid) continue;
-                if ((frame_ts_ - c.last_update_ts) > (uint32_t)DECAY_WINDOW) {
-                    c.traversability *= DECAY_FACTOR;
-                    if (c.traversability < DECAY_MIN_TRAV && c.obstacle_flag == 1)
-                        c.obstacle_flag = 2;
-                    decayed++;
-                }
-            }
-            RCLCPP_DEBUG(get_logger(), "[DRDO] Frame %u: %d decayed | %d inserted.",
-                         frame_ts_, decayed, inserted);
-        }
-    }
-
-    void publish_costmap() {
-        constexpr int   GW = 200, GH = 200;
-        constexpr float CS = 1.00f;   // Level-3 cell size for costmap
-        auto msg = nav_msgs::msg::OccupancyGrid();
-        msg.header.stamp    = get_clock()->now();
-        msg.header.frame_id = "map";
-        msg.info.resolution = CS;
-        msg.info.width      = GW;
-        msg.info.height     = GH;
-        msg.info.origin.position.x = -GW * CS / 2.0;
-        msg.info.origin.position.y = -GH * CS / 2.0;
-        msg.data.assign(GW * GH, -1);
-
-        float CSIZES[4] = {0.05f, 0.20f, 0.50f, 1.00f};
-        for (int j = 0; j < GH; j++) {
-            for (int i = 0; i < GW; i++) {
-                float wx = msg.info.origin.position.x + (i+0.5f)*CS;
-                float wy = msg.info.origin.position.y + (j+0.5f)*CS;
-                GridCell* cell = nullptr;
-                for (int lv = 0; lv < 4 && !cell; lv++) {
-                    int32_t qx = (int32_t)floorf(wx/CSIZES[lv]);
-                    int32_t qy = (int32_t)floorf(wy/CSIZES[lv]);
-                    cell = lookup_cell_fn(qx, qy, (uint8_t)lv);
-                }
-                int8_t val = -1;
-                if (cell) {
-                    if      (cell->obstacle_flag==1) val = 100;
-                    else if (cell->obstacle_flag==0) val = 0;
-                    else                             val = 50;
-                }
-                msg.data[j*GW+i] = val;
-            }
-        }
-        costmap_pub_->publish(msg);
-    }
-
-    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pc_sub_;
-    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr      costmap_pub_;
-    rclcpp::TimerBase::SharedPtr                                    publish_timer_;
-    tf2_ros::Buffer                                                 tf_buffer_;
-    tf2_ros::TransformListener                                      tf_listener_;
-    uint32_t                                                        frame_ts_;
-};
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<GridMapNode>());
+    auto node = rclcpp::Node::make_shared("drdo_grid_map_node");
+
+    const string world_frame   = node->declare_parameter<string>("world_frame", "map");
+    const string base_frame    = node->declare_parameter<string>("base_frame", "base_link");
+    const double publish_hz    = node->declare_parameter<double>("publish_rate_hz", 5.0);
+    const double grid_res      = node->declare_parameter<double>("grid_resolution", 0.20);
+    const double grid_size_m   = node->declare_parameter<double>("grid_size_m", 100.0);
+    const double min_range     = node->declare_parameter<double>("min_range", 0.3);        // ADL-3 self-return filter
+    const double tf_timeout_s  = node->declare_parameter<double>("tf_timeout_s", 0.05);
+    const int    purge_every   = (int)node->declare_parameter<int>("purge_every_n_frames", 10);
+    const double purge_margin  = node->declare_parameter<double>("purge_margin_m", 20.0);
+
+    reset_map_pool();
+    RCLCPP_INFO(node->get_logger(), "[DRDO] Hash pool ready (%d cells, 40 MB). world=%s base=%s",
+                HASH_TABLE_SIZE, world_frame.c_str(), base_frame.c_str());
+
+    tf2_ros::Buffer tf_buffer(node->get_clock());
+    tf2_ros::TransformListener tf_listener(tf_buffer);   // spins its own thread
+
+    auto grid_pub = node->create_publisher<nav_msgs::msg::OccupancyGrid>(
+        "occupancy_grid", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+
+    uint32_t frame_ts = 0;
+    float robot_x = 0.0f, robot_y = 0.0f, ground_z = 0.0f;
+    bool have_pose = false;
+    uint64_t reported_fail = 0;
+
+    auto on_cloud = [&](sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) {
+        // 1. Robot pose at the scan timestamp. No pose -> skip the frame. The legacy node silently
+        //    used (0,0), re-centring the foveation on the map origin and corrupting the map.
+        geometry_msgs::msg::TransformStamped base_tf, cloud_tf;
+        try {
+            base_tf = tf_buffer.lookupTransform(world_frame, base_frame, tf2_ros::fromMsg(msg->header.stamp),
+                                                tf2::durationFromSec(tf_timeout_s));
+            cloud_tf = (msg->header.frame_id == world_frame)
+                ? geometry_msgs::msg::TransformStamped()
+                : tf_buffer.lookupTransform(world_frame, msg->header.frame_id, tf2_ros::fromMsg(msg->header.stamp),
+                                            tf2::durationFromSec(tf_timeout_s));
+        } catch (const tf2::TransformException& ex) {
+            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 2000,
+                                 "[DRDO] TF %s<-%s unavailable, frame skipped: %s",
+                                 world_frame.c_str(), base_frame.c_str(), ex.what());
+            return;
+        }
+        robot_x  = (float)base_tf.transform.translation.x;
+        robot_y  = (float)base_tf.transform.translation.y;
+        ground_z = (float)base_tf.transform.translation.z;   // base_link sits on the ground plane
+        have_pose = true;
+        bool identity = (msg->header.frame_id == world_frame);
+        const auto& q = cloud_tf.transform.rotation;
+        const auto& t = cloud_tf.transform.translation;
+        const float R[9] = {
+            (float)(1 - 2 * (q.y * q.y + q.z * q.z)), (float)(2 * (q.x * q.y - q.z * q.w)), (float)(2 * (q.x * q.z + q.y * q.w)),
+            (float)(2 * (q.x * q.y + q.z * q.w)), (float)(1 - 2 * (q.x * q.x + q.z * q.z)), (float)(2 * (q.y * q.z - q.x * q.w)),
+            (float)(2 * (q.x * q.z - q.y * q.w)), (float)(2 * (q.y * q.z + q.x * q.w)), (float)(1 - 2 * (q.x * q.x + q.y * q.y))};
+
+        // 2. Validate the PointCloud2 layout instead of blindly memcpy-ing 4 bytes per field.
+        int off_x = -1, off_y = -1, off_z = -1, off_label = -1; uint8_t label_type = 0;
+        for (const auto& f : msg->fields) {
+            bool f32 = f.datatype == sensor_msgs::msg::PointField::FLOAT32;
+            if (f.name == "x" && f32) off_x = (int)f.offset;
+            if (f.name == "y" && f32) off_y = (int)f.offset;
+            if (f.name == "z" && f32) off_z = (int)f.offset;
+            if (f.name == "label") { off_label = (int)f.offset; label_type = f.datatype; }
+        }
+        size_t n_pts = (size_t)msg->width * msg->height;
+        if (off_x < 0 || off_y < 0 || off_z < 0 || msg->is_bigendian ||
+            msg->point_step < 12 || msg->data.size() < n_pts * msg->point_step) {
+            RCLCPP_ERROR_THROTTLE(node->get_logger(), *node->get_clock(), 5000,
+                                  "[DRDO] Unsupported PointCloud2 (need little-endian FLOAT32 x/y/z, consistent size)");
+            return;
+        }
+
+        frame_ts++;
+        const uint8_t* data = msg->data.data();
+        const float min_r2 = (float)(min_range * min_range);
+        int inserted = 0;
+        for (size_t i = 0; i < n_pts; i++) {
+            const uint8_t* pt = data + i * msg->point_step;
+            float px, py, pz;
+            memcpy(&px, pt + off_x, 4); memcpy(&py, pt + off_y, 4); memcpy(&pz, pt + off_z, 4);
+            if (!isfinite(px) || !isfinite(py) || !isfinite(pz)) continue;
+
+            int label = 6;   // UNKNOWN unless a segmentation stage attached labels
+            if (off_label >= 0) {
+                if      (label_type == sensor_msgs::msg::PointField::UINT8)  { uint8_t  v; memcpy(&v, pt + off_label, 1); label = v; }
+                else if (label_type == sensor_msgs::msg::PointField::UINT16) { uint16_t v; memcpy(&v, pt + off_label, 2); label = v; }
+                else if (label_type == sensor_msgs::msg::PointField::UINT32) { uint32_t v; memcpy(&v, pt + off_label, 4); label = (int)min<uint32_t>(v, 255); }
+                else if (label_type == sensor_msgs::msg::PointField::FLOAT32){ float    v; memcpy(&v, pt + off_label, 4); label = isfinite(v) ? (int)v : 6; }
+            }
+
+            float wx = px, wy = py, wz = pz;
+            if (!identity) {
+                wx = R[0] * px + R[1] * py + R[2] * pz + (float)t.x;
+                wy = R[3] * px + R[4] * py + R[5] * pz + (float)t.y;
+                wz = R[6] * px + R[7] * py + R[8] * pz + (float)t.z;
+            }
+            float dx = wx - robot_x, dy = wy - robot_y;
+            if (dx * dx + dy * dy < min_r2) continue;
+            if (insert_lidar_point(wx, wy, wz, label, robot_x, robot_y, frame_ts, ground_z)) inserted++;
+        }
+
+        // 3. Classify only what changed (legacy: full 1M-slot rescan that also undid the decay).
+        int classified = classify_dirty_cells(ground_z);
+        int decayed    = run_temporal_decay(frame_ts);
+        int purged     = (purge_every > 0 && frame_ts % (uint32_t)purge_every == 0)
+                             ? purge_distant_cells(robot_x, robot_y, (float)purge_margin) : 0;
+
+        float load = get_load_factor();
+        if (load > LOAD_WARN)
+            RCLCPP_WARN_THROTTLE(node->get_logger(), *node->get_clock(), 2000,
+                                 "[DRDO] Hash pool load %.2f > %.2f — lower purge_margin_m", load, LOAD_WARN);
+        if (g_insert_fail != reported_fail) {
+            RCLCPP_ERROR_THROTTLE(node->get_logger(), *node->get_clock(), 2000,
+                                  "[DRDO] %llu points dropped: hash pool saturated",
+                                  (unsigned long long)(g_insert_fail - reported_fail));
+            reported_fail = g_insert_fail;
+        }
+        RCLCPP_DEBUG(node->get_logger(), "[DRDO] frame %u: in=%d cls=%d dec=%d purged=%d load=%.3f",
+                     frame_ts, inserted, classified, decayed, purged, load);
+    };
+
+    // Robot-centred rolling window, rasterised from the pool with max-cost aggregation over each
+    // cell's footprint. The legacy publisher sampled one 5 cm cell at the centre of each fixed 1 m
+    // output cell (a rock off-centre was invisible) and never followed the robot.
+    const int GW = max(1, (int)lround(grid_size_m / grid_res));
+    auto publish_grid = [&]() {
+        if (!have_pose) return;
+        nav_msgs::msg::OccupancyGrid out;
+        out.header.stamp    = node->get_clock()->now();
+        out.header.frame_id = world_frame;
+        out.info.resolution = (float)grid_res;
+        out.info.width      = GW;
+        out.info.height     = GW;
+        double ox = floor((robot_x - grid_size_m / 2.0) / grid_res) * grid_res;
+        double oy = floor((robot_y - grid_size_m / 2.0) / grid_res) * grid_res;
+        out.info.origin.position.x = ox;
+        out.info.origin.position.y = oy;
+        out.info.origin.orientation.w = 1.0;
+        out.data.assign((size_t)GW * GW, -1);
+
+        for (int i = 0; i < HASH_TABLE_SIZE; i++) {
+            const GridCell& c = g_hash_pool[i];
+            if (!c.valid) continue;
+            int8_t cost;
+            if      (c.obstacle_flag == 1)                            cost = 100;
+            else if (c.hit_count == 0)                                cost = 0;     // carved free space
+            else if (frame_ts > c.last_update_ts && frame_ts - c.last_update_ts > (uint32_t)DECAY_WINDOW &&
+                     c.traversability < DECAY_MIN_TRAV)               continue;     // decayed -> unknown
+            else if (c.semantic_label == 4 || c.semantic_label == 5)  cost = 100;   // OBSTACLE_HARD / WATER_MUD
+            else {
+                float conf  = fminf((float)c.hit_count / 10.0f, 1.0f);
+                float score = conf > 0.0f ? c.traversability / conf : 0.0f;   // undo confidence weighting
+                cost = (int8_t)lround(99.0f * (1.0f - fminf(fmaxf(score, 0.0f), 1.0f)));
+            }
+            float cs = CELL_RESOLUTIONS[c.level < NUM_LEVELS ? c.level : NUM_LEVELS - 1];
+            int x0 = (int)floor((c.ix * cs - ox) / grid_res), x1 = (int)floor(((c.ix + 1) * cs - ox) / grid_res - 1e-4);
+            int y0 = (int)floor((c.iy * cs - oy) / grid_res), y1 = (int)floor(((c.iy + 1) * cs - oy) / grid_res - 1e-4);
+            if (x1 < 0 || y1 < 0 || x0 >= GW || y0 >= GW) continue;
+            x0 = max(x0, 0); y0 = max(y0, 0); x1 = min(x1, GW - 1); y1 = min(y1, GW - 1);
+            for (int y = y0; y <= y1; y++)
+                for (int x = x0; x <= x1; x++) {
+                    int8_t& v = out.data[(size_t)y * GW + x];
+                    if (cost > v) v = cost;
+                }
+        }
+        grid_pub->publish(out);
+    };
+
+    auto cloud_sub = node->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "pointcloud", rclcpp::SensorDataQoS(), on_cloud);
+    auto timer = node->create_wall_timer(
+        chrono::duration_cast<chrono::nanoseconds>(chrono::duration<double>(1.0 / max(publish_hz, 0.1))),
+        publish_grid);
+
+    rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
 }

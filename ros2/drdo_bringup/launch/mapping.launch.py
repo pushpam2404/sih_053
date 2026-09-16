@@ -1,68 +1,63 @@
 #!/usr/bin/env python3
 """
-DRDO ID26053 — Phase 5: Complete Autonomous Mapping Launch Pipeline
+DRDO ID26053 — Complete Autonomous Mapping Launch Pipeline
 Brings up:
   1. FAST-LIO2 (IMU-LiDAR Odometry & Mapping for Ouster OS1-64)
-  2. NVIDIA nvblox (GPU TSDF / 3D ESDF Field)
-  3. DRDO Adaptive Variable-Resolution 2.5D Grid Map Node
-  4. Static Transform Publishers (base_link -> os_sensor, os_imu)
+  2. DRDO Adaptive Variable-Resolution 2.5D Grid Map Node
+  3. Static transforms bridging FAST-LIO frames to the REP-105 tree used by Nav2
+  4. (optional, enable_nvblox:=true) NVIDIA nvblox GPU TSDF / ESDF
+
+TF tree:  map -> camera_init (FAST-LIO world) -> body (FAST-LIO IMU, dynamic) -> base_link -> os_sensor
+          map -> odom (identity: FAST-LIO has no loop closure, so map and odom coincide)
 """
 
 import os
-import sys
 
 # Attempt ROS 2 Launch imports
 try:
     from launch import LaunchDescription
     from launch.actions import DeclareLaunchArgument
-    from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+    from launch.conditions import IfCondition
+    from launch.substitutions import LaunchConfiguration
     from launch_ros.actions import Node
-    from launch_ros.substitutions import FindPackageShare
     ROS2_LAUNCH_AVAILABLE = True
 except ImportError:
     ROS2_LAUNCH_AVAILABLE = False
 
+LIDAR_MOUNT_HEIGHT_M = "1.2"   # base_link (ground contact) -> os_sensor
+
 
 def generate_launch_description():
     """Builds and returns the ROS 2 LaunchDescription for the DRDO Mapping stack."""
-    # Paths to configuration files
     pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     fast_lio_cfg = os.path.join(pkg_dir, "config", "fast_lio_ouster64.yaml")
     nvblox_cfg = os.path.join(pkg_dir, "config", "nvblox_params.yaml")
 
-    # Launch arguments
     points_topic_arg = DeclareLaunchArgument(
-        "points_topic",
-        default_value="/ouster/points",
-        description="Input raw LiDAR pointcloud topic (Ouster OS1-64)"
-    )
+        "points_topic", default_value="/ouster/points",
+        description="Input raw LiDAR pointcloud topic (Ouster OS1-64)")
     imu_topic_arg = DeclareLaunchArgument(
-        "imu_topic",
-        default_value="/ouster/imu",
-        description="Input raw IMU topic"
-    )
+        "imu_topic", default_value="/ouster/imu", description="Input raw IMU topic")
     resolution_arg = DeclareLaunchArgument(
-        "map_resolution",
-        default_value="0.05",
-        description="Base 2.5D grid map resolution (meters)"
-    )
+        "map_resolution", default_value="0.20",
+        description="Published OccupancyGrid resolution (m). The internal map stays foveated 5 cm..1 m")
+    nvblox_arg = DeclareLaunchArgument(
+        "enable_nvblox", default_value="false",
+        description="nvblox is unverified with an unorganised world-frame cloud and has no consumer yet")
 
-    # 1. FAST-LIO2 Node
+    # 1. FAST-LIO2 Node — it reads topics from parameters, so remapping /ouster/points had no effect.
     fast_lio_node = Node(
         package="fast_lio",
         executable="fastlio_mapping",
         name="fast_lio_mapping",
         output="screen",
-        parameters=[fast_lio_cfg],
-        remappings=[
-            ("/ouster/points", LaunchConfiguration("points_topic")),
-            ("/ouster/imu", LaunchConfiguration("imu_topic")),
-            ("/cloud_registered", "/cloud_registered"),
-            ("/Odometry", "/Odometry")
-        ]
+        parameters=[fast_lio_cfg, {
+            "common.lid_topic": LaunchConfiguration("points_topic"),
+            "common.imu_topic": LaunchConfiguration("imu_topic"),
+        }],
     )
 
-    # 2. NVIDIA nvblox GPU 3D ESDF Node
+    # 2. NVIDIA nvblox GPU 3D ESDF Node (opt-in)
     nvblox_node = Node(
         package="nvblox_ros",
         executable="nvblox_node",
@@ -72,62 +67,61 @@ def generate_launch_description():
         remappings=[
             ("pointcloud", "/cloud_registered"),
             ("esdf_slice", "/nvblox_node/esdf_slice"),
-            ("mesh", "/nvblox_node/mesh")
-        ]
+            ("mesh", "/nvblox_node/mesh"),
+        ],
+        condition=IfCondition(LaunchConfiguration("enable_nvblox")),
     )
 
-    # 3. DRDO Adaptive Variable-Resolution 2.5D Grid Map Node
+    # 3. DRDO grid map. Parameter and topic names match what grid_map_node.cpp declares/uses;
+    #    the previous remaps and parameters matched nothing, so the node never received data.
     grid_map_node = Node(
         package="drdo_grid_map",
         executable="grid_map_node",
         name="drdo_grid_map_node",
         output="screen",
         parameters=[{
-            "resolution": 0.05,
-            "grid_size_x": 2000,
-            "grid_size_y": 2000,
-            "decay_half_life": 10.0,
-            "enable_esdf": True,
-            "esdf_integration": "nvblox_3d"
+            "world_frame": "map",
+            "base_frame": "base_link",
+            "grid_resolution": LaunchConfiguration("map_resolution"),
+            "grid_size_m": 100.0,
+            "publish_rate_hz": 5.0,
+            "min_range": 0.3,
+            "purge_every_n_frames": 10,
+            "purge_margin_m": 20.0,
         }],
         remappings=[
             ("pointcloud", "/cloud_registered"),
             ("occupancy_grid", "/map"),
-            ("esdf_slice", "/nvblox_node/esdf_slice"),
-            ("dynamic_obstacles", "/drdo/dynamic_obstacles")
-        ]
+        ],
     )
 
-    # 4. Static TF transforms
+    # 4. Static TF transforms. The previous base_link -> os_imu publisher gave os_imu a second
+    #    parent (the Ouster driver already publishes os_sensor -> os_imu), and nothing published
+    #    map or base_link relative to FAST-LIO's camera_init/body frames.
+    tf_map_to_camera_init = Node(
+        package="tf2_ros", executable="static_transform_publisher", name="map_to_camera_init",
+        arguments=["0", "0", "0", "0", "0", "0", "map", "camera_init"])
+    tf_map_to_odom = Node(
+        package="tf2_ros", executable="static_transform_publisher", name="map_to_odom",
+        arguments=["0", "0", "0", "0", "0", "0", "map", "odom"])
+    tf_body_to_base = Node(
+        package="tf2_ros", executable="static_transform_publisher", name="body_to_base_link",
+        arguments=["0", "0", "-" + LIDAR_MOUNT_HEIGHT_M, "0", "0", "0", "body", "base_link"])
     tf_base_to_lidar = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="base_to_lidar_broadcaster",
-        arguments=["0", "0", "1.2", "0", "0", "0", "base_link", "os_sensor"]
-    )
-    tf_base_to_imu = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="base_to_imu_broadcaster",
-        arguments=["0", "0", "1.0", "0", "0", "0", "base_link", "os_imu"]
-    )
+        package="tf2_ros", executable="static_transform_publisher", name="base_to_lidar_broadcaster",
+        arguments=["0", "0", LIDAR_MOUNT_HEIGHT_M, "0", "0", "0", "base_link", "os_sensor"])
 
     ld = LaunchDescription()
-    ld.add_action(points_topic_arg)
-    ld.add_action(imu_topic_arg)
-    ld.add_action(resolution_arg)
-    ld.add_action(tf_base_to_lidar)
-    ld.add_action(tf_base_to_imu)
-    ld.add_action(fast_lio_node)
-    ld.add_action(nvblox_node)
-    ld.add_action(grid_map_node)
-
+    for action in (points_topic_arg, imu_topic_arg, resolution_arg, nvblox_arg,
+                   tf_map_to_camera_init, tf_map_to_odom, tf_body_to_base, tf_base_to_lidar,
+                   fast_lio_node, nvblox_node, grid_map_node):
+        ld.add_action(action)
     return ld
 
 
 def validate_launch_configuration():
     """Validates launch configuration and parameters across packages."""
-    print("Testing Step P5.3.1: Validating ROS 2 Launch & SLAM Configurations...")
+    print("Validating ROS 2 Launch & SLAM Configurations...")
     pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     fast_lio_cfg = os.path.join(pkg_dir, "config", "fast_lio_ouster64.yaml")
     nvblox_cfg = os.path.join(pkg_dir, "config", "nvblox_params.yaml")
@@ -137,32 +131,35 @@ def validate_launch_configuration():
     print(f"  [CONF] FAST-LIO2 Ouster config found: {fast_lio_cfg}")
     print(f"  [CONF] nvblox 3D ESDF config found: {nvblox_cfg}")
 
-    # Inspect fast_lio YAML
-    with open(fast_lio_cfg, "r") as f:
-        fl_content = f.read()
-        assert "lid_topic" in fl_content and "/ouster/points" in fl_content
-        assert "lidar_type: 2" in fl_content  # Ouster OS1-64
+    try:
+        import yaml
+        with open(fast_lio_cfg, "r") as f:
+            fl = yaml.safe_load(f)
+        params = fl["/**"]["ros__parameters"]
+        assert params["common"]["lid_topic"] == "/ouster/points"
+        assert params["preprocess"]["lidar_type"] == 3, "FAST-LIO Ouster driver type is 3 (OUST64)"
+    except ImportError:
+        with open(fast_lio_cfg, "r") as f:
+            fl_content = f.read()
+        assert "ros__parameters" in fl_content and "lidar_type: 3" in fl_content
 
-    # Inspect nvblox YAML
     with open(nvblox_cfg, "r") as f:
         nv_content = f.read()
-        assert "esdf: true" in fl_content or "esdf: true" in nv_content
-        assert "voxel_size: 0.05" in nv_content
+    assert "voxel_size:" in nv_content
 
     if ROS2_LAUNCH_AVAILABLE:
         ld = generate_launch_description()
-        assert len(ld.entities) >= 5, "LaunchDescription missing expected actions"
+        assert len(ld.entities) >= 8, "LaunchDescription missing expected actions"
         print(f"  [ROS2] LaunchDescription validated natively with {len(ld.entities)} entities.")
     else:
-        print("  [INFO] ROS 2 python packages not installed on host. Syntactic & structural AST validation active.")
+        print("  [INFO] ROS 2 python packages not installed on host. File-level validation only.")
 
     print("  [NODES CONFIGURED]:")
-    print("    1. fast_lio::fastlio_mapping -> Ingests /ouster/points, outputs /cloud_registered, /Odometry")
-    print("    2. nvblox_ros::nvblox_node   -> Ingests /cloud_registered, computes 3D GPU ESDF field")
-    print("    3. drdo_grid_map::grid_map   -> Ingests /cloud_registered + /esdf_slice, outputs /map")
-    print("    4. tf2_ros broadcasters     -> base_link -> os_sensor, os_imu")
-
-    print("[STEP P5.3.1 COMPLETE]")
+    print("    1. fast_lio::fastlio_mapping -> /cloud_registered (camera_init), TF camera_init->body")
+    print("    2. drdo_grid_map::grid_map_node -> /cloud_registered in, /map out (transient_local)")
+    print("    3. tf2_ros static: map->camera_init, map->odom, body->base_link, base_link->os_sensor")
+    print("    4. nvblox_ros::nvblox_node   -> only with enable_nvblox:=true")
+    print("[LAUNCH CONFIGURATION VALID]")
 
 
 if __name__ == "__main__":

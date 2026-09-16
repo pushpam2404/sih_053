@@ -1,34 +1,58 @@
-# Configuration for FAST-LIO2 with Ouster OS1-64 LiDAR and built-in IMU
+# Configuration for FAST-LIO2 (ROS 2 branch) with Ouster OS1-64 LiDAR and built-in IMU
 # Tuned for DRDO Off-Road Autonomous Ground Vehicle (AGV)
+#
+# Audit fixes:
+#  * ROS 2 parameter files must be wrapped in <node or /**>: ros__parameters: — the previous
+#    ROS 1-style layout is rejected by rclcpp at launch.
+#  * lidar_type 2 is VELO16 in FAST-LIO's preprocess enum {AVIA=1, VELO16, OUST64}; Ouster is 3.
+#  * pcd_save_en pinned to false: saving accumulates the whole map in RAM for the mission.
+# Output frames (FAST-LIO defaults): world = camera_init, body = body (IMU). mapping.launch.py
+# bridges them to map / base_link with static transforms.
 
-common:
-  lid_topic: "/ouster/points"
-  imu_topic: "/ouster/imu"
-  time_sync_en: false         # True if hardware PTP sync not active
-  time_offset_lidar_to_imu: 0.0
+/**:
+  ros__parameters:
+    feature_extract_enable: false
+    point_filter_num: 4
+    max_iteration: 3
+    filter_size_surf: 0.5
+    filter_size_map: 0.5
+    cube_side_length: 1000.0
+    runtime_pos_log_enable: false
 
-preprocess:
-  lidar_type: 2               # 2: Ouster OS1-64
-  scan_line: 64
-  scan_rate: 10               # 10 Hz
-  timestamp_unit: 3           # 3: Nanoseconds
-  blind: 0.5                  # Blind radius (meters)
+    common:
+      lid_topic: "/ouster/points"
+      imu_topic: "/ouster/imu"
+      time_sync_en: false         # True if hardware PTP sync not active
+      time_offset_lidar_to_imu: 0.0
 
-mapping:
-  acc_cov: 0.1
-  gyr_cov: 0.1
-  b_acc_cov: 0.0001
-  b_gyr_cov: 0.0001
-  fov_degree: 360
-  det_range: 100.0
-  extrinsic_est_en: false     # Set to true for online extrinsic calibration
-  extrinsic_T: [0.0, 0.0, 0.0]
-  extrinsic_R: [1, 0, 0,
-                0, 1, 0,
-                0, 0, 1]
+    preprocess:
+      lidar_type: 3               # 3: OUST64 (Ouster). 2 would be Velodyne VLP-16
+      scan_line: 64
+      scan_rate: 10               # 10 Hz (2048x10 mode). Keep consistent with the driver lidar_mode
+      timestamp_unit: 3           # 3: Nanoseconds
+      blind: 0.5                  # Blind radius (m). Raise to the vehicle hull radius to drop self-returns
 
-publish:
-  path_en: true
-  scan_publish_en: true
-  dense_publish_en: true
-  scan_bodyframe_pub_en: false
+    mapping:
+      acc_cov: 0.1
+      gyr_cov: 0.1
+      b_acc_cov: 0.0001
+      b_gyr_cov: 0.0001
+      fov_degree: 360.0
+      det_range: 100.0
+      extrinsic_est_en: false     # Set to true for online extrinsic calibration
+      # Identity is only valid if the IMU is the Ouster-internal one. Replace with the
+      # os_lidar -> os_imu transform from the sensor metadata for a precise calibration.
+      extrinsic_T: [0.0, 0.0, 0.0]
+      extrinsic_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]
+
+    publish:
+      path_en: true
+      scan_publish_en: true
+      dense_publish_en: true      # drdo_grid_map needs the dense cloud
+      scan_bodyframe_pub_en: false
+
+    pcd_save:
+      pcd_save_en: false
+      interval: -1

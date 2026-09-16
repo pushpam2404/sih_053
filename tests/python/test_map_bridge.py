@@ -14,7 +14,7 @@ import os
 import sys
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-# Include phase3/lib where compiled .so currently resides
+# Compiled drdo_map*.so is expected in lib/ (copy it there from build/ after a CMake build)
 lib_path = os.path.join(REPO_ROOT, "lib")
 if lib_path not in sys.path:
     sys.path.insert(0, lib_path)

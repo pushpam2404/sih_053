@@ -1,16 +1,18 @@
 import sys, os, time, json
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import numpy as np
-sys.path.insert(0, os.path.expanduser("~/Desktop/sih/phase3/lib"))
-sys.path.insert(0, os.path.expanduser("~/Desktop/sih/phase3/python"))
+sys.path.insert(0, os.path.join(REPO_ROOT, "lib"))
+sys.path.insert(0, REPO_ROOT)
 import drdo_map
-from mink_inference import MinkUNetInference
+from drdo_lidar_mapping.inference.mink_inference import MinkUNetInference
 
-CKPT = os.path.expanduser("~/Desktop/sih/phase4/data/weights/minkunet18_drdo_ep30.pth")
-RESULTS = os.path.expanduser("~/Desktop/sih/phase4/results/e2e_benchmark.json")
+CKPT = os.path.join(REPO_ROOT, "models", "minkunet18_drdo_ep30.pth")
+RESULTS = os.path.join(REPO_ROOT, "results", "e2e_benchmark.json")
 
 def benchmark():
     print("[E2E BENCHMARK] Initializing model and map...")
-    model = MinkUNetInference(checkpoint_path=CKPT, device="auto")
+    # TorchSparse++ is absent on dev hosts: timings then measure a numpy heuristic, and the report says so.
+    model = MinkUNetInference(checkpoint_path=CKPT, device="auto", allow_fallback=True)
     drdo_map.reset_map()
 
     N_FRAMES = 20
@@ -70,6 +72,7 @@ def benchmark():
     mean_cls   = float(np.mean(classify_times))
 
     report = {
+        "segmentation_backend": "heuristic_fallback" if model.dummy_mode else "minkunet18",
         "n_frames": N_FRAMES,
         "points_per_frame": N_POINTS,
         "mean_frame_ms": mean_total,

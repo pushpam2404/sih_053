@@ -65,12 +65,13 @@ $$\sigma_n^2 = \frac{M_{2,n}}{n - 1} \quad (n > 1)$$
 ### 2.3 Foveated Multi-Resolution Mapping
 Grid cell size $\Delta_s(d)$ varies discretely with Euclidean distance $d = \sqrt{(x - x_r)^2 + (y - y_r)^2}$:
 $$\Delta_s(d) = \begin{cases} 
-0.05\,\text{m} & 0 \le d \le 5\,\text{m} & (\text{Level 0: Immediate terrain}) \\
-0.20\,\text{m} & 5 < d < 20\,\text{m} & (\text{Level 1: Mid-range reaction zone}) \\
-0.50\,\text{m} & 20 \le d < 50\,\text{m} & (\text{Level 2: Long-range horizon}) \\
-1.00\,\text{m} & 50 \le d \le 100\,\text{m} & (\text{Level 3: Strategic terrain preview}) \\
+0.05\,\text{m} & 0 \le d \le 10\,\text{m} & (\text{Level 0: Immediate terrain}) \\
+0.10\,\text{m} & 10 < d \le 25\,\text{m} & (\text{Level 1: Reaction zone}) \\
+0.50\,\text{m} & 25 < d \le 100\,\text{m} & (\text{Level 2: Long-range horizon}) \\
 \text{discard} & d > 100\,\text{m} & (\text{Noise boundary})
 \end{cases}$$
+Cell indices at every level derive from one 5 cm lattice by integer floor division (ratios 1 : 2 : 10), so each
+cell nests exactly inside one cell of every coarser level: no straddling, no float-rounding misalignment.
 
 ### 2.4 Fused Traversability Metric
 Cell traversability score $\tau \in [0.0, 1.0]$ combines geometric surface roughness with semantic classification:

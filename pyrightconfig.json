@@ -1,11 +1,12 @@
 {
   "include": [
-    "phase3/python"
+    "drdo_lidar_mapping",
+    "scripts",
+    "tests/python"
   ],
   "extraPaths": [
-    "./phase3/lib",
-    "./phase3/python",
-    "/Users/pushpam/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/lib/python3.11/site-packages"
+    "./lib",
+    "."
   ],
   "pythonPath": "/Users/pushpam/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/bin/python3",
   "pythonVersion": "3.11",

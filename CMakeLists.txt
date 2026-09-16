@@ -23,12 +23,20 @@ target_include_directories(drdo_map_lib PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
+# Linked into the pybind11 shared module: non-PIC objects fail to link into a .so on Linux/aarch64.
+set_target_properties(drdo_map_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # 2. C++ Grid Engine Unit Test
 add_executable(test_grid_engine
     tests/cpp/test_grid_engine.cpp
 )
 target_link_libraries(test_grid_engine PRIVATE drdo_map_lib)
+
+# 2b. Engine regression gates + sustained-drive load test (see SIH_Deep_Dive_Audit.md)
+add_executable(test_engine_regression
+    tests/cpp/test_engine_regression.cpp
+)
+target_link_libraries(test_engine_regression PRIVATE drdo_map_lib)
 
 # 3. Optional Pybind11 Python Module
 find_package(pybind11 QUIET)
@@ -57,6 +65,7 @@ else()
 endif()
 
 # 4. Optional CUDA Kernels (Jetson / NVIDIA GPU)
+include(CheckLanguage)   # check_language() is undefined without this module
 check_language(CUDA)
 if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
@@ -66,6 +75,7 @@ if(CMAKE_CUDA_COMPILER)
         cuda/drdo_cuda_kernels.cu
     )
     target_include_directories(test_cuda_kernels PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_link_libraries(test_cuda_kernels PRIVATE drdo_map_lib)   # CPU/GPU hash parity check
     message(STATUS "CUDA enabled: building test_cuda_kernels for sm_87 (Jetson AGX Orin)")
 endif()
 

@@ -1,4 +1,8 @@
 #!/bin/bash
+set -e
 source /opt/ros/humble/setup.bash
-source /workspace/sih/phase3/ros2/install/setup.bash
-exec ros2 launch /workspace/sih/phase5/ros2/launch/drdo_mapping.launch.py "$@"
+source /workspace/sih/ros2/install/setup.bash
+# Default: full stack (mapping + Nav2). Override, e.g.: docker run ... drdo-nav mapping.launch.py
+LAUNCH_FILE="${1:-navigation.launch.py}"
+shift || true
+exec ros2 launch drdo_bringup "$LAUNCH_FILE" "$@"

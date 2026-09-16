@@ -21,7 +21,7 @@ Autonomous navigation in rugged, off-road military scenarios presents extreme ch
 
 This repository implements the complete end-to-end engineered solution for **DRDO Problem Statement ID 26053**. Engineered for real-time deployment on the **NVIDIA Jetson AGX Orin 64GB** with an **Ouster OS1-64 LiDAR**, this architecture unifies:
 1. **$O(1)$ Spatial Hash 2.5D Elevation Grid** with running Welford variance.
-2. **4-Tier Foveated Multi-Resolution Mapping** (5 cm to 100 cm).
+2. **3-Tier Foveated Multi-Resolution Mapping** (5 cm within 10 m, 10 cm to 25 m, 50 cm to 100 m; exactly nested).
 3. **MinkUNet18 3D Sparse Convolutional Semantic Segmentation** fine-tuned on the RELLIS-3D off-road dataset.
 4. **Euclidean DBSCAN Clustering & SORT 3D Kalman Filter Tracking** for dynamic obstacles.
 5. **Amortized Temporal Log-Odds Decay Kernel** to eliminate airborne dust and smoke.
@@ -93,7 +93,7 @@ Every single requirement of the DRDO ID26053 problem statement has been designed
 ## 4. Key Engineering Highlights & Innovations
 
 ### 1. Zero-Allocation Spatial Hash Grid ($O(1)$)
-Traditional elevation maps allocate large contiguous 2D matrices that consume gigabytes or drop past terrain when the vehicle translates. Our engine uses a 40 MB pre-allocated contiguous hash array with linear probing (`MAX_PROBE = 128`), allowing the vehicle to traverse an infinite operational theater without dynamic memory allocations (`malloc`/`free`) in the real-time loop.
+Traditional elevation maps allocate large contiguous 2D matrices that consume gigabytes or drop past terrain when the vehicle translates. Our engine uses an 80 MB pre-allocated contiguous hash array (2^21 × 40-byte cells; ~16–18 MB live in the drive tests) with linear probing (`MAX_PROBE = 128`), allowing the vehicle to traverse an infinite operational theater without dynamic memory allocations (`malloc`/`free`) in the real-time loop.
 
 ### 2. Welford Online Single-Pass Variance
 To determine terrain traversability and identify negative obstacles without storing past point histories, we use Welford's algorithm:
@@ -101,10 +101,11 @@ $$\mu_n = \mu_{n-1} + \frac{z_n - \mu_{n-1}}{n}, \quad M_{2,n} = M_{2,n-1} + (z_
 Surface roughness $\sigma = \sqrt{M_2 / (n - 1)}$ is continuously evaluated in $O(1)$ time per LiDAR return.
 
 ### 3. Foveated Multi-Resolution Pyramid
-- **Level 0 (0–5m):** $0.05\,\text{m}$ (5 cm) — high resolution for wheel ruts, small rocks, and immediate drop-offs.
-- **Level 1 (5–20m):** $0.20\,\text{m}$ (20 cm) — reaction zone for steering maneuvers.
-- **Level 2 (20–50m):** $0.50\,\text{m}$ (50 cm) — medium-range obstacle avoidance.
-- **Level 3 (50–100m):** $1.00\,\text{m}$ (100 cm) — strategic terrain preview.
+- **Level 0 (0–10 m):** $0.05\,\text{m}$ (5 cm) — wheel ruts, small rocks, curbs and immediate drop-offs.
+- **Level 1 (10–25 m):** $0.10\,\text{m}$ (10 cm) — reaction zone for steering manoeuvres.
+- **Level 2 (25–100 m):** $0.50\,\text{m}$ (50 cm) — long-range obstacle avoidance and terrain preview.
+
+All levels are integer multiples of one 5 cm lattice, so cells nest exactly across band edges.
 
 ### 4. Semantic Traversability Prioritization
 Point clouds are segmented into 8 semantic categories with distinct operational traversability factors:

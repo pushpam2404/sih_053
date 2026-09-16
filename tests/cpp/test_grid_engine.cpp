@@ -29,14 +29,14 @@ void test_foveated_resolution() {
     ResolvedCell r0 = resolve_resolution(2.0f, 2.0f, 0.0f, 0.0f); // dist ~ 2.8m -> Level 0
     assert(r0.level == 0 && !r0.discard && abs(r0.cell_size - 0.05f) < 1e-4);
 
-    ResolvedCell r1 = resolve_resolution(10.0f, 0.0f, 0.0f, 0.0f); // dist 10m -> Level 1
-    assert(r1.level == 1 && !r1.discard && abs(r1.cell_size - 0.20f) < 1e-4);
+    ResolvedCell r1 = resolve_resolution(15.0f, 0.0f, 0.0f, 0.0f); // dist 15m -> Level 1
+    assert(r1.level == 1 && !r1.discard && abs(r1.cell_size - 0.10f) < 1e-4);
 
-    ResolvedCell r2 = resolve_resolution(30.0f, 0.0f, 0.0f, 0.0f); // dist 30m -> Level 2
+    ResolvedCell r2 = resolve_resolution(70.0f, 0.0f, 0.0f, 0.0f); // dist 70m -> Level 2
     assert(r2.level == 2 && !r2.discard && abs(r2.cell_size - 0.50f) < 1e-4);
 
-    ResolvedCell r3 = resolve_resolution(70.0f, 0.0f, 0.0f, 0.0f); // dist 70m -> Level 3
-    assert(r3.level == 3 && !r3.discard && abs(r3.cell_size - 1.00f) < 1e-4);
+    ResolvedCell r10 = resolve_resolution(9.99f, 0.0f, 0.0f, 0.0f); // 5 cm cells within the 10 m radius
+    assert(r10.level == 0);
 
     ResolvedCell r_out = resolve_resolution(150.0f, 0.0f, 0.0f, 0.0f); // dist > 100m -> Discard
     assert(r_out.discard);

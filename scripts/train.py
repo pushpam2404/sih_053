@@ -1,17 +1,18 @@
 import sys, os, json
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 
-sys.path.insert(0, os.path.expanduser("~/Desktop/sih/phase3/python"))
-sys.path.insert(0, ".")
-from rellis_dataset import RELLISDataset
+sys.path.insert(0, REPO_ROOT)
+sys.path.insert(0, REPO_ROOT)
+from drdo_lidar_mapping.segmentation.dataset import RELLISDataset
 
 # Lock parameters
-RELLIS_ROOT  = os.path.expanduser("~/Desktop/sih/phase4/data/rellis")
-WEIGHTS_DIR  = os.path.expanduser("~/Desktop/sih/phase4/data/weights")
-RESULTS_FILE = os.path.expanduser("~/Desktop/sih/phase4/results/train_log.json")
+RELLIS_ROOT  = os.path.join(REPO_ROOT, "data", "rellis")
+WEIGHTS_DIR  = os.path.join(REPO_ROOT, "models")
+RESULTS_FILE = os.path.join(REPO_ROOT, "results", "train_log.json")
 NUM_EPOCHS   = 30
 LR           = 1e-4
 VOXEL_SIZE   = 0.05

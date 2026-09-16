@@ -1,4 +1,3 @@
-# phase3/python/mink_inference.py
 """
 MinkUNet-18 inference wrapper for DRDO ID26053.
 Backend: TorchSparse++ (torchsparse >= 2.1)
@@ -22,30 +21,42 @@ class MinkUNetInference:
     """
     VOXEL_SIZE = 0.05  # metres — locked by ADL-3
 
-    def __init__(self, checkpoint_path: str = None, device: str = "auto"):
+    def __init__(self, checkpoint_path: str = None, device: str = "auto", allow_fallback: bool = False):
+        """allow_fallback: if a checkpoint was requested but TorchSparse++ is missing, use the
+        z/range heuristic instead of raising. Default False — the previous behaviour silently
+        substituted heuristics, so benchmarks reported "inference" latency for a numpy threshold."""
         if device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
         self.use_fp16   = self.device.type == "cuda"
         self.model      = None
+        self.allow_fallback = allow_fallback
         self.dummy_mode = (checkpoint_path is None)
         if not self.dummy_mode:
             self._load_model(checkpoint_path)
         print(f"[MinkUNetInference] device={self.device}  fp16={self.use_fp16}"
-              f"  mode={'DUMMY' if self.dummy_mode else 'REAL'}")
+              f"  mode={'DUMMY-HEURISTIC' if self.dummy_mode else 'REAL'}")
 
     def _load_model(self, path: str):
         try:
             from torchsparse.models import MinkUNet18  # type: ignore
         except ImportError as e:
-            print(f"[MinkUNetInference] TorchSparse++ not installed ({e}); using Host CPU/Dummy model.")
+            if not self.allow_fallback:
+                raise RuntimeError(
+                    f"Checkpoint {path} requested but TorchSparse++ is not installed ({e}). "
+                    "Pass allow_fallback=True to explicitly accept heuristic labels.") from e
+            print(f"[MinkUNetInference] WARNING: TorchSparse++ not installed ({e}); "
+                  "labels are a z/range HEURISTIC, not a neural network.")
             self.dummy_mode = True
             return
         self.model = MinkUNet18(in_channels=4, num_classes=NUM_CLASSES)
         ckpt  = torch.load(path, map_location=self.device)
         state = ckpt.get("model_state_dict", ckpt.get("state_dict", ckpt))
-        self.model.load_state_dict(state, strict=False)
+        result = self.model.load_state_dict(state, strict=False)
+        if result.missing_keys or result.unexpected_keys:
+            raise RuntimeError(f"Checkpoint {path} does not match MinkUNet18: "
+                               f"{len(result.missing_keys)} missing / {len(result.unexpected_keys)} unexpected keys")
         self.model.to(self.device).eval()
         if self.use_fp16:
             self.model.half()
