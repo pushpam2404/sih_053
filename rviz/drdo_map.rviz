@@ -1,0 +1,24 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Displays:
+    - Class: rviz_default_plugins/Map
+      Name: DRDO 2.5D Costmap
+      Topic:
+        Value: /drdo/costmap
+      Color Scheme: costmap
+      Alpha: 0.75
+      Draw Under: false
+      Enabled: true
+    - Class: rviz_default_plugins/TF
+      Name: TF Frames
+      Enabled: true
+  Global Options:
+    Fixed Frame: map
+    Background Color: 40; 40; 40
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Scale: 10.0
+      Target Frame: base_link

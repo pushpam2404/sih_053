@@ -1,0 +1,197 @@
+# DRDO ID26053 — Phase 6: Nav2 Configuration for Autonomous Off-Road Navigation
+# Configured for Ouster OS1-64 + FAST-LIO2 + 2.5D Adaptive Mapping + MPPI Controller
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: false
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /Odometry
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    enable_groot_monitoring: false
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_replan_condition_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+
+planner_server:
+  ros__parameters:
+    use_sim_time: false
+    planner_plugins: [GridBased]
+    GridBased:
+      plugin: nav2_smac_planner/SmacPlannerHybrid
+      downsample_costmap: false
+      downsampling_factor: 1
+      tolerance: 0.5
+      allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 2.0
+      motion_model_for_search: REEDS_SHEPP
+      cost_penalty: 2.0
+      change_penalty: 0.1
+      non_straight_penalty: 1.2
+      reverse_penalty: 2.0
+      minimum_turning_radius: 0.4
+      angle_quantization_bins: 72
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      lookup_table_size: 20.0
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: false
+    smoother_plugins: [SimpleSmoother]
+    SimpleSmoother:
+      plugin: nav2_smoother::SimpleSmoother
+      tolerance: 1.0e-10
+      max_iterations: 1000
+      w_data: 0.2
+      w_smooth: 0.3
+
+controller_server:
+  ros__parameters:
+    use_sim_time: false
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: progress_checker
+    goal_checker_plugins: [general_goal_checker]
+    controller_plugins: [FollowPath]
+
+    progress_checker:
+      plugin: nav2_controller::SimpleProgressChecker
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+
+    general_goal_checker:
+      plugin: nav2_controller::SimpleGoalChecker
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25
+      stateful: true
+
+    FollowPath:
+      plugin: nav2_mppi_controller::MPPIController
+      time_steps: 56
+      model_dt: 0.05
+      batch_size: 1000
+      vx_std: 0.2
+      vy_std: 0.0
+      wz_std: 0.4
+      vx_max: 2.0
+      vx_min: -0.5
+      vy_max: 0.0
+      wz_max: 1.0
+      iteration_count: 1
+      prune_distance: 1.5
+      transform_tolerance: 0.1
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: Ackermann
+      visualize: true
+      reset_period: 1.0
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: map
+      robot_base_frame: base_link
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      map_topic: /map
+      resolution: 0.05
+      track_unknown_space: true
+      plugins: [static_layer, obstacle_layer, inflation_layer]
+      static_layer:
+        plugin: nav2_costmap_2d::StaticLayer
+        map_topic: /map
+        map_subscribe_transient_local: true
+        enabled: true
+        subscribe_to_updates: true
+      obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        observation_sources: dynamic_obstacles
+        dynamic_obstacles:
+          topic: /drdo/dynamic_obstacles
+          sensor_frame: base_link
+          observation_persistence: 0.0
+          expected_update_rate: 10.0
+          data_type: PointCloud2
+          min_obstacle_height: 0.1
+          max_obstacle_height: 2.5
+          clearing: true
+          marking: true
+      inflation_layer:
+        plugin: nav2_costmap_2d::InflationLayer
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: false
+      global_frame: odom
+      robot_base_frame: base_link
+      update_frequency: 10.0
+      publish_frequency: 5.0
+      rolling_window: true
+      width: 10.0
+      height: 10.0
+      resolution: 0.05
+      plugins: [obstacle_layer, inflation_layer]
+      obstacle_layer:
+        plugin: nav2_costmap_2d::ObstacleLayer
+        enabled: true
+        observation_sources: dynamic_obstacles
+        dynamic_obstacles:
+          topic: /drdo/dynamic_obstacles
+          sensor_frame: base_link
+          observation_persistence: 0.0
+          expected_update_rate: 10.0
+          data_type: PointCloud2
+          min_obstacle_height: 0.1
+          max_obstacle_height: 2.5
+          clearing: true
+          marking: true
+      inflation_layer:
+        plugin: nav2_costmap_2d::InflationLayer
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+
+# AMCL is explicitly disabled: FAST-LIO2 publishes continuous map -> odom -> base_link TF.
+# Localization is provided directly by LiDAR-inertial odometry.
+amcl:
+  ros__parameters:
+    use_sim_time: false
+    two_d_pose_estimate_initial_pose_topic: ""
+
+# Static map server disabled: live dynamic map streamed on /map by drdo_grid_map_node.
+map_server:
+  ros__parameters:
+    use_sim_time: false
+    yaml_filename: ""

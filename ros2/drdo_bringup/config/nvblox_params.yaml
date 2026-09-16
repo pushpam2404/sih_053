@@ -1,0 +1,29 @@
+# NVIDIA nvblox GPU-Accelerated TSDF/ESDF Parameter File
+# Target: Jetson AGX Orin — DRDO Problem ID26053
+
+/**:
+  ros__parameters:
+    # Voxel grid resolution
+    voxel_size: 0.05                    # 5 cm voxel size matching MinkUNet
+    block_capacity: 100000              # Maximum GPU blocks
+    
+    # Distance Field Integrator
+    esdf: true                          # Enable Euclidean Signed Distance Field
+    esdf_mode: "3d"                     # 3D continuous distance field
+    esdf_integrator_max_distance_m: 2.0 # Maximum computed distance to obstacles
+    esdf_integrator_min_weight: 1e-4
+    
+    # TSDF Integrator
+    tsdf_integrator_max_integration_distance_m: 15.0
+    tsdf_integrator_truncation_distance_vox: 4.0
+    
+    # Mesh extraction for visualization
+    mesh: true
+    mesh_integrator_min_weight: 1e-4
+    
+    # Frames & Topics
+    global_frame: "odom"
+    pointcloud_frame: "os_sensor"
+    esdf_slice_height: 0.2              # Ground clearance slice height (m)
+    esdf_slice_min_height: -0.5
+    esdf_slice_max_height: 1.5

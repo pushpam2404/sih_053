@@ -1,0 +1,15 @@
+# Core Python Dependencies
+numpy>=1.22.0
+scipy>=1.8.0
+pyyaml>=6.0
+scikit-learn>=1.0.0
+torch>=2.0.0
+
+# Pybind11 for C++ compilation
+pybind11>=2.10.0
+
+# Deployment & Serialization
+onnx>=1.14.0
+
+# Testing & Quality
+pytest>=7.0.0

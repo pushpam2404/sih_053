@@ -1,0 +1,65 @@
+# DRDO ID26053 — Phase 6: Jetson AGX Orin Production Dockerfile
+# Base: NVIDIA L4T PyTorch (JetPack 5.x, CUDA 12.x, PyTorch 2.0)
+# Build: docker build -f Dockerfile.jetson -t drdo_id26053:v6 .
+# Run:   docker run --runtime=nvidia --rm -it drdo_id26053:v6
+
+FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3
+
+# 1. Set non-interactive mode for apt
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 2. Install ROS 2 Humble
+RUN apt-get update && apt-get install -y \
+    curl gnupg2 lsb-release software-properties-common && \
+    curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+    -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+    http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
+    | tee /etc/apt/sources.list.d/ros2.list && \
+    apt-get update && apt-get install -y \
+    ros-humble-desktop \
+    ros-humble-nav2-bringup \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-geometry-msgs \
+    python3-colcon-common-extensions \
+    libpython3.10-dev \
+    python3-pip \
+    pybind11-dev \
+    cmake \
+    g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+# 3. Install Python dependencies
+RUN pip3 install --no-cache-dir \
+    numpy==1.26.4 \
+    scipy \
+    scikit-learn \
+    onnx \
+    pycuda
+
+# 4. Copy the entire SIH project workspace
+WORKDIR /workspace
+COPY . /workspace/sih/
+
+# 5. Build the pybind11 drdo_map.so module
+RUN cd /workspace/sih/phase3 && \
+    g++ -O2 -std=c++17 -shared -fPIC \
+    $(python3 -m pybind11 --includes) \
+    -I/workspace/sih/phase2/include \
+    src/drdo_map_py.cpp \
+    -o lib/drdo_map$(python3-config --extension-suffix)
+
+# 6. Build the drdo_grid_map ROS 2 package
+RUN /bin/bash -c "source /opt/ros/humble/setup.bash && \
+    cd /workspace/sih/phase3/ros2 && \
+    colcon build --symlink-install --packages-select drdo_grid_map"
+
+# 7. Set ROS 2 environment and entrypoint
+ENV ROS_DISTRO=humble
+ENV AMENT_PREFIX_PATH=/workspace/sih/phase3/ros2/install/drdo_grid_map:/opt/ros/humble
+ENV PYTHONPATH=/workspace/sih/phase3/lib:/workspace/sih/phase3/python:$PYTHONPATH
+
+# 8. Launch the full autonomous mapping stack
+COPY phase6/docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

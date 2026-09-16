@@ -1,0 +1,119 @@
+# ==============================================================================
+# DRDO ID26053 — .gitignore
+# Production-grade exclusions for Robotics, C++, Python, ROS 2, and Edge Systems
+# ==============================================================================
+
+# --- Operating System Artifacts ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- C++ & Build Systems ---
+build/
+bin/
+obj/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+*.ninja
+.ninja_*
+compile_commands.json
+compile_flags.txt
+.clangd/
+
+# --- Python Environment & Bytecode ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyd
+*.pyo
+*.egg
+*.egg-info/
+.eggs/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.installed.cfg
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Testing & Code Quality ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.ruff_cache/
+.mypy_cache/
+
+# --- ROS 2 & Colcon ---
+install/
+log/
+.colcon/
+colcon.meta
+
+# --- IDEs & Editors ---
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# --- Heavy Datasets, Point Clouds & Bags ---
+*.bag
+*.db3
+*.pcd
+*.las
+*.laz
+*.tar
+*.tar.gz
+*.zip
+*.7z
+data/rellis/**/*.bin
+data/rellis/**/*.label
+!data/rellis/00002/os1_cloud_node_kitti_bin/000000.bin
+!data/rellis/00002/os1_cloud_node_kitti_bin/000000.label
+
+# --- Compiled TensorRT Engines (Hardware specific to target GPU) ---
+*.engine
+*.plan
+
+# --- Local Agent Workspace & Internal Cache ---
+.agents/
+.cache/
+archive/
+
+# Keep models directory tracked
+!models/minkunet18_drdo_ep30.pth
+!models/minkunet18_traced.pt
+!models/minkunet18_drdo.onnx

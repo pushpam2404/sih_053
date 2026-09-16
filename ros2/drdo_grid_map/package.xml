@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>drdo_grid_map</name>
+  <version>1.0.0</version>
+  <description>DRDO ID26053 — Foveated 2.5D LiDAR Grid Map ROS2 Publisher</description>
+  <maintainer email="drdo@sih2026.in">SIH Team</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drdo_lidar_mapping"
+version = "0.6.0"
+description = "DRDO ID26053: Adaptive 2.5D Elevation & Semantic Mapping for Autonomous Off-Road Military Vehicles"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "DRDO ID26053 Autonomous Navigation Team", email = "autonomous-systems@drdo.gov.in"}
+]
+keywords = [
+    "lidar", "mapping", "robotics", "ros2", "autonomous-vehicles",
+    "elevation-mapping", "point-cloud", "minkunet", "tensorrt", "drdo"
+]
+dependencies = [
+    "numpy>=1.20.0",
+    "scipy>=1.7.0",
+    "pyyaml>=5.4.0",
+    "torch>=2.0.0",
+    "scikit-learn>=1.0.0"
+]
+
+[project.optional-dependencies]
+deploy = [
+    "onnx>=1.12.0"
+]
+dev = [
+    "pytest>=6.0.0",
+    "ruff>=0.1.0"
+]

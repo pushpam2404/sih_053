@@ -1,0 +1,10 @@
+{
+  "python.defaultInterpreterPath": "/Users/pushpam/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/bin/python3",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/phase3/lib",
+    "${workspaceFolder}/phase3/python"
+  ],
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingImports": "none"
+  }
+}
