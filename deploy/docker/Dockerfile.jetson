@@ -61,7 +61,7 @@ RUN cd /workspace/sih && \
 # 5. ROS 2 packages
 RUN /bin/bash -c "source /opt/ros/humble/setup.bash && \
     cd /workspace/sih/ros2 && \
-    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-select drdo_grid_map drdo_bringup"
+    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-select drdo_grid_map drdo_perception drdo_bringup"
 
 ENV PYTHONPATH=/workspace/sih/lib:$PYTHONPATH
 

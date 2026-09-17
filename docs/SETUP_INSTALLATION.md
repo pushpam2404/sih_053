@@ -89,7 +89,8 @@ sudo apt-get install -y \
 
 ### Build with Colcon
 ```bash
-colcon build --packages-select drdo_grid_map drdo_bringup --symlink-install
+pip install -e .          # drdo_perception imports the repository's Python package
+colcon build --packages-select drdo_grid_map drdo_perception drdo_bringup --symlink-install
 source install/setup.bash
 ```
 
@@ -100,6 +101,9 @@ source install/setup.bash
 Run the full test suite to confirm everything is operational:
 
 ```bash
+# 0. Moving-object detector (parked cars, walls and trees must never be reported as moving)
+python3 tests/python/test_dynamic.py
+
 # 1. Test Dynamic Perception & SORT Tracking
 python3 tests/python/test_perception.py
 
@@ -112,6 +116,8 @@ python3 tests/python/test_map_bridge.py
 
 Expected output:
 ```
+================================================================================
+[DYNAMIC OBSTACLE SUITE: ALL TESTS PASSED]
 ================================================================================
                     [PERCEPTION SUITE: ALL TESTS PASSED]                        
 ================================================================================
@@ -135,7 +141,16 @@ ros2 launch drdo_bringup mapping.launch.py points_topic:=/ouster/points imu_topi
 ros2 launch drdo_bringup navigation.launch.py
 ```
 
+Launch arguments: `filter_moving_objects:=false` maps straight from `/cloud_registered`; `map_color_mode:=elevation` switches the colour view.
+
 ### Visualizing in RViz2
 ```bash
 rviz2 -d rviz/drdo_map.rviz
 ```
+The layout shows the `/map` costmap, the `/drdo/map_image` colour view (terrain: green flat, amber rough, red lethal, teal overhang) and `/drdo/dynamic_obstacles` moving-object markers.
+
+### Offline dashboard (no ROS)
+```bash
+python3 scripts/map_dashboard.py                  # -> reports/map_dashboard.html
+```
+Needs the compiled `lib/drdo_map*.so` pybind11 module.

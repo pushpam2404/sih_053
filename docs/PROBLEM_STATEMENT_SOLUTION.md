@@ -1,64 +1,42 @@
-# DRDO Problem Statement ID 26053: Technical Approach & Engineered Solution
+# DRDO Problem Statement ID 26053: Requirements vs. Our Solution
 
-## 1. Problem Statement Overview
+## 1. The problem statement
 
-- **Title:** Adaptive 2.5D Elevation & Semantic Mapping for Autonomous Off-Road Military Vehicles in GPS-Denied, High-Speed Environments
-- **Host Organisation:** Defence Research and Development Organisation (DRDO)
-- **Target Application:** Unmanned Ground Vehicles (UGVs) and autonomous combat support vehicles maneuvering at speeds up to 40 km/h across unstructured off-road terrains (deserts, forests, mud, rocky ravines) without reliance on satellite navigation (GNSS/GPS-denied).
+- **Title:** Adaptive Variable Resolution 2.5D Lidar Mapping for Dynamic Environment Perception
+- **Organisation:** DRDO (Department of Defence R&D) · **Category:** Software · **Theme:** Smart Vehicles
+- **Core idea:** raw 3D LiDAR is too heavy to process in real time, and a plain 2D grid loses heights (curbs, potholes, overhangs). Build a *foveated* 2.5D map: fine cells near the vehicle, coarse cells far away, with no alignment errors or data loss between resolutions, and handle moving objects.
 
----
+Status legend: ✅ done and tested on the host · 🟡 done, not yet run on the vehicle/Orin · ⏸ deliberately deferred.
 
-## 2. Core Off-Road Challenges vs. Our Engineered Solutions
+## 2. Requirement matrix
 
-| # | Off-Road Operational Challenge | Why Standard Autonomy Fails | Our Engineered Solution | Subsystem / Location |
+| # | Requirement (statement wording) | Our solution | Evidence | Status |
 |---|---|---|---|---|
-| **1** | **Extreme Dynamic Dust & Smoke** | Dust clouds and exhaust generate dense LiDAR returns, triggering false emergency stops. | **Temporal Log-Odds Decay Kernel ($O(K)$ amortized):** Cells without persistent returns decay rapidly ($0.90^{age}$) and reset from `OBSTACLE` to `FREE`/`UNKNOWN`. | `src/drdo_map.cpp`, `drdo_cuda_kernels.cu` |
-| **2** | **Negative Obstacles (Trenches, Ditches, Cliffs)** | Standard 2D occupancy grids only detect positive vertical obstacles above ground level. | **Welford Running Height Variance & Minimum Height Tracking:** Evaluates step height ($h_{max} - h_{min}$) and variance to capture sudden elevation drops and ditch edges. | `include/drdo_lidar_mapping/drdo_map.h`, `src/drdo_map.cpp` |
-| **3** | **Deformable Vegetation vs. Lethal Obstacles** | High grass, tall weeds, and bushes appear as solid obstacles to geometric filters, trapping vehicles. | **3D Sparse Convolutional Semantic Segmentation (MinkUNet18):** Points are classified into 8 classes (`GROUND`, `GRAVEL`, `GRASS`, `VEGETATION`, `OBSTACLE`, `WATER`, `UNKNOWN`, `SKY`). Soft grass receives a high traversability weight ($0.65$), while trees/rocks receive $0.0$. | `drdo_lidar_mapping/segmentation/`, `models/` |
-| **4** | **High-Speed Computational Bottleneck** | At 40 km/h (11.1 m/s), full 3D dense volumetric grids (OctoMap/VDB) exhaust GPU/CPU memory and exceed the 20 Hz latency deadline. | **Foveated 3-Tier Multi-Resolution Spatial Hash Grid:** 5 cm (0–10 m), 10 cm (10–25 m), 50 cm (25–100 m), exactly nested on one 5 cm lattice. $O(1)$ spatial hashing with a fixed 80 MB pool (~16–18 MB live). | `include/drdo_lidar_mapping/drdo_map.h`, `src/drdo_map.cpp` |
-| **5** | **Severe Sensor Vibration & Odometry Drift** | Rugged terrain causes aggressive roll/pitch shakes and wheel slip, corrupting map registration. | **Tightly-Coupled Iterated Kalman Filtering (FAST-LIO2):** Fuses 64-beam LiDAR and high-rate IMU (200 Hz) to maintain sub-centimeter odometry in GPS-denied scenarios. | `ros2/drdo_bringup/config/fast_lio_ouster64.yaml` |
-| **6** | **Dynamic Target Tracking (Vehicles, Soldiers, Drones)** | Static maps smudge moving entities across the map grid. | **DBSCAN Clustering + SORT 3D Kalman Tracking:** Clusters hard obstacle points and tracks dynamic instances across time with Kalman state estimation and Hungarian assignment. | `drdo_lidar_mapping/perception/` |
-| **7** | **Kinodynamic Off-Road Path Planning** | Standard A* or 2D Dijkstra planners produce sharp turns infeasible for high-speed Ackermann/skid-steer UGVs. | **Nav2 SmacPlannerHybrid (Hybrid-A*) + MPPI Controller:** Generates continuous-curvature paths respecting vehicle turning limits, terrain traversability costmaps, and obstacle distance gradients. | `ros2/drdo_bringup/config/nav2_params.yaml`, `deploy/` |
-| **8** | **SWaP (Size, Weight, and Power) Edge Constraints** | Military field vehicles cannot carry desktop GPUs; inference must run on embedded edge hardware. | **TensorRT FP16 Engine Execution on Jetson AGX Orin:** Sub-12 ms latency at 15W–30W power envelope. | `deploy/tensorrt/`, `deploy/docker/` |
+| 1 | **Terrain analysis:** drivable vs non-drivable | Per-cell height step, clearance and roughness give flat / rough / lethal step / overhang, with a traversability score. Free space is carved by ray-casting; stale obstacles and dust decay. | `src/drdo_map.cpp`, regression gates 2–4 | ✅ flat ground · slopes and trenches are next (§4) |
+| 2 | **Object detection:** static obstacles and dynamic objects (pedestrians, vehicles) | Static: lethal cells in the map. Dynamic: `perception/dynamic.py` confirms an object as moving when its whole footprint shifts **and** the space it left is empty, then removes it from the static map and publishes it. | `tests/python/test_dynamic.py`; dashboard: 89–98% recall, 0 static objects reported moving | ✅ host · 🟡 ROS node |
+| 3 | **Deep-learning model** (PointNet++ / sparse CNN) | Deferred for the hackathon round. The map and ROS graph already accept per-point labels (`label` field), so a network plugs in without architecture changes. Current model files are placeholders at chance level (`scripts/eval.py`). | — | ⏸ |
+| 4 | **Variable-resolution grid:** 5 cm within 10 m, coarser (50 cm) to 100 m | 5 cm ≤ 10 m, 10 cm ≤ 25 m, 50 cm ≤ 100 m | `drdo_map.h`, `test_grid_engine` | ✅ |
+| 5 | **No alignment errors** in the 3D → 2.5D projection | All levels derive from one 5 cm lattice by integer division (1 : 2 : 10); every fine cell sits inside exactly one coarse cell | Gate 6: 0 mismatches over 4M positions. The previous 5/20/50/100 cm pyramid had 20% of 20 cm cells straddling 50 cm edges. | ✅ |
+| 6 | **No data loss** | A fixed pool with band-aware eviction and zero dropped inserts; the query returns the freshest level; evicted fine cells stay covered by the coarser level | 3.3 km at 40 km/h: 0 dropped points, peak load 0.29 | ✅ |
+| 7 | **Real-time visualisation dashboard** with distinct colours for terrain and objects | Live: `/drdo/map_image` (terrain or elevation colours) + `/drdo/dynamic_obstacles` markers in RViz. Offline: `reports/map_dashboard.html` with layers, band rings, moving objects, memory and latency. | `scripts/map_dashboard.py`, `rviz/drdo_map.rviz` | ✅ dashboard · 🟡 RViz |
+| 8 | **Significant memory reduction** vs a uniform high-resolution 3D map | 16–18 MB live vs 3,835 MB for uniform 5 cm voxels (~210×) and 479 MB for a uniform 5 cm 2.5D grid (~26×), same 100 m radius | `test_engine_regression` `[MEMORY]` | ✅ |
+| 9 | **Low latency / high FPS** | ~14–20 ms map update per scan on one CPU thread (Apple M4); ~3.5 ms moving-object detection | regression test, dashboard | ✅ host · 🟡 Orin numbers pending |
+| 10 | **Accuracy across varying distances** | Moving-object recall by range: 98% / 95% / 89% (0–10 / 10–25 / 25–40 m) at 5 m/s; 95% / 93% / 71% at 11.1 m/s. Segmentation metrics by range exist in `scripts/eval.py` for when a network is trained. | dashboard | ✅ synthetic scene |
 
----
+## 3. Off-road challenges we also address
 
-## 3. Detailed Subsystem Implementation Matrix
+| Challenge | Approach | Location |
+|---|---|---|
+| Dust and exhaust clouds | Cells not re-observed decay; their height statistics restart when seen again, so a passed dust cloud clears | `src/drdo_map.cpp` |
+| Overhanging branches and wires | Clearance above ground > 0.5 m is passable (shown teal in the colour view) | `classify_obstacle` |
+| Vibration and GPS denial | FAST-LIO2 LiDAR-inertial odometry (Ouster config, `lidar_type: 3`) | `ros2/drdo_bringup/config/fast_lio_ouster64.yaml` |
+| Vehicle-feasible paths | Nav2 SmacPlannerHybrid + MPPI on our `/map` | `ros2/drdo_bringup/config/nav2_params.yaml` |
+| Moving people and vehicles smearing the map | Moving-object filter upstream of the map | `ros2/drdo_perception/` |
 
-### Phase 1: High-Performance Memory & Hash Map Engine
-- **Memory Pool:** Pre-allocated 80 MB contiguous array (`1 << 21` buckets) eliminating runtime dynamic memory allocation (`malloc`/`free`) in critical path.
-- **GridCell Struct:** Aligned to exactly 40 bytes (cache-line friendly, 1.6 cells per 64-byte L1 cache line).
-- **Fast Spatial Hashing:** Murmur3-inspired integer bitwise mix:
-  $$h(i_x, i_y, l) = ((i_x \cdot 2654435761) \oplus (i_y \cdot 805459861) \oplus (l \cdot 1234567891)) \pmod{2^{20}}$$
-- **Online Variance:** Welford's single-pass recurrence avoiding historical point buffering:
-  $$\mu_n = \mu_{n-1} + \frac{x_n - \mu_{n-1}}{n}, \quad M_{2,n} = M_{2,n-1} + (x_n - \mu_{n-1})(x_n - \mu_n)$$
+## 4. Known gaps and next steps
 
-### Phase 2: Temporal Filtering, Foveation & Traversability Fusion
-- **Foveated Pyramid:** Dynamic level resolution based on Euclidean distance:
-  - $d \le 10\,\text{m} \implies \text{Level 0: } 0.05\,\text{m}$ (immediate wheel contact terrain)
-  - $10 < d \le 25\,\text{m} \implies \text{Level 1: } 0.10\,\text{m}$ (near path planning horizon)
-  - $25 < d \le 100\,\text{m} \implies \text{Level 2: } 0.50\,\text{m}$ (long-range obstacle avoidance)
-  - $d > 100\,\text{m} \implies \text{Discard}$ (beyond sensor fidelity boundary)
-- **Fused Traversability Index:**
-  $$\tau = \text{confidence} \times \left(0.5 \cdot e^{-5.0 \cdot \sigma_z} + 0.5 \cdot \text{SEM\_TRAV}[c]\right)$$
-  where $\sigma_z = \sqrt{M_2 / (n - 1)}$ is terrain roughness.
-
-### Phase 3: Hardware Acceleration & ROS 2 Bridge
-- **Pybind11 C++ Bridge:** Zero-overhead zero-copy access from Python perception nodes to underlying C++ hash pool.
-- **CUDA Kernels:** Massively parallel GPU update kernel (`update_height_kernel`), parallel temporal decay kernel (`decay_stale_cells_kernel`), and classification kernel (`classify_and_score_kernel`).
-- **ROS 2 Grid Map Node (`drdo_grid_map`):** Subscribes to `/cloud_registered`, ingests point clouds, and publishes `/map` (`nav_msgs/OccupancyGrid`) at 20 Hz.
-
-### Phase 4: Off-Road Semantic Perception (RELLIS-3D)
-- **Fine-Tuned MinkUNet18:** Trained on RELLIS-3D rugged off-road dataset using class-weighted focal Cross-Entropy loss.
-- **Taxonomy Remapping:** 34 raw classes mapped to 8 operational military vehicle classes.
-- **Data Augmentation:** LaserMix azimuth angle splicing, random yaw rotations, and coordinate jittering.
-
-### Phase 5: Dynamic Obstacle Tracking & 3D ESDF Field
-- **DBSCAN Clustering:** Groups hard obstacle points into 3D oriented bounding boxes (`centroid`, `min_bound`, `max_bound`, `extent`).
-- **SORT 3D Kalman Tracker:** Tracks moving targets across frames, estimating position $(x, y)$ and velocity $(\dot{x}, \dot{y})$ with Hungarian association.
-- **FAST-LIO2 + nvblox Launch:** Integrates IMU-LiDAR odometry with GPU-accelerated TSDF/ESDF distance slice computation.
-
-### Phase 6: Edge Deployment & Autonomous Navigation
-- **Nav2 SmacPlannerHybrid + MPPI Controller:** Kinodynamically feasible trajectory planning respecting minimum turning radius and terrain cost.
-- **ONNX & TensorRT FP16:** Model serialized and compiled via `trtexec` with explicit batch sizing for Jetson AGX Orin.
-- **Docker Packaging:** Production Dockerfile based on NVIDIA L4T PyTorch container with automated bringup entrypoint.
+1. Run the full ROS graph on the Orin with a recorded Ouster bag and publish measured latency.
+2. Local ground estimation for slopes; trench (negative obstacle) detection from height drops and LiDAR shadows.
+3. Height-aware free-space carving, so a ray passing over a rock does not downgrade it.
+4. Moving-object confirmation takes about 1 s; tune it for the vehicle's speed and add occlusion handling on real data.
+5. If selected: a segmentation network (range-image or sparse CNN) trained on RELLIS-3D / SemanticKITTI, feeding the existing label path.

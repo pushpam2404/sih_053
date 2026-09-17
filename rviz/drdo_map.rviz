@@ -11,6 +11,16 @@ Visualization Manager:
       Alpha: 0.75
       Draw Under: false
       Enabled: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Moving objects
+      Topic:
+        Value: /drdo/dynamic_obstacles
+      Enabled: true
+    - Class: rviz_default_plugins/Image
+      Name: Colour map (terrain)
+      Topic:
+        Value: /drdo/map_image
+      Enabled: true
     - Class: rviz_default_plugins/TF
       Name: TF Frames
       Enabled: true

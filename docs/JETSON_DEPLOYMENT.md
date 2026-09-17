@@ -33,36 +33,23 @@ tegrastats
 
 ---
 
-## 3. Compiling TensorRT Engine on Target Hardware
+## 3. First measurements to take on the Orin
 
-TensorRT engine plans are **strictly hardware-specific** to the GPU microarchitecture (Ampere sm_87). Compile directly on the target Jetson Orin:
+No numbers in this repository come from an Orin yet. Take these first and put only these in the slides:
 
 ```bash
-# Navigate to TensorRT deployment directory
-cd deploy/tensorrt
+# Map engine: regression gates, 3.3 km drive at 40 km/h, memory comparison
+cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build
+./build/test_engine_regression
 
-# Execute the compilation script
-bash compile_trt.sh
+# Full ROS graph on a recorded Ouster bag
+ros2 launch drdo_bringup mapping.launch.py &
+ros2 bag play <your_ouster_bag>
+ros2 topic hz /map /drdo/map_image /drdo/dynamic_obstacles
+# the moving-object node logs ms/scan every 10 s; watch tegrastats for temperature and power
 ```
 
-Under the hood, `compile_trt.sh` invokes `trtexec`:
-```bash
-trtexec \
-  --onnx=../../models/minkunet18_drdo.onnx \
-  --saveEngine=../../models/minkunet18_drdo_fp16.engine \
-  --fp16 \
-  --memPoolSize=workspace:2048MiB \
-  --minShapes=points:1x4 \
-  --optShapes=points:32768x4 \
-  --maxShapes=points:131072x4 \
-  --verbose
-```
-
-### Performance Metrics Achieved:
-- **Batch Size:** 32,768 points (typical half-scan)
-- **Inference Latency:** 11.4 ms (FP16)
-- **Throughput:** > 85 FPS (well above 20 Hz sensor rate)
-- **GPU Memory Allocation:** 412 MB
+The deep-learning path (`deploy/tensorrt/compile_trt.sh`, `models/`) is future work: the current ONNX model is a placeholder, so TensorRT latency for it would not mean anything.
 
 ---
 

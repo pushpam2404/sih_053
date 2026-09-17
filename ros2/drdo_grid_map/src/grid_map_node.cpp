@@ -6,10 +6,13 @@
 // Topics (relative names so launch-file remappings apply):
 //   sub  pointcloud      sensor_msgs/PointCloud2   (e.g. FAST-LIO2 /cloud_registered, any frame)
 //   pub  occupancy_grid  nav_msgs/OccupancyGrid    (transient_local: Nav2 StaticLayer requires it)
+//   pub  map_image       sensor_msgs/Image (rgb8)  colour-coded live view of the same window, north up,
+//                                                  robot at the centre (RViz "Image" display)
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2/time.h>
@@ -36,16 +39,19 @@ int main(int argc, char** argv) {
     const double tf_timeout_s  = node->declare_parameter<double>("tf_timeout_s", 0.05);
     const int    purge_every   = (int)node->declare_parameter<int>("purge_every_n_frames", 10);
     const double purge_margin  = node->declare_parameter<double>("purge_margin_m", 20.0);
+    const bool   publish_image = node->declare_parameter<bool>("publish_image", true);
+    const string color_mode    = node->declare_parameter<string>("color_mode", "terrain");   // terrain | elevation
 
     reset_map_pool();
-    RCLCPP_INFO(node->get_logger(), "[DRDO] Hash pool ready (%d cells, 40 MB). world=%s base=%s",
-                HASH_TABLE_SIZE, world_frame.c_str(), base_frame.c_str());
+    RCLCPP_INFO(node->get_logger(), "[DRDO] Hash pool ready (%d cells, %zu MB). world=%s base=%s",
+                HASH_TABLE_SIZE, sizeof(g_hash_pool) >> 20, world_frame.c_str(), base_frame.c_str());
 
     tf2_ros::Buffer tf_buffer(node->get_clock());
     tf2_ros::TransformListener tf_listener(tf_buffer);   // spins its own thread
 
     auto grid_pub = node->create_publisher<nav_msgs::msg::OccupancyGrid>(
         "occupancy_grid", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+    auto image_pub = node->create_publisher<sensor_msgs::msg::Image>("map_image", rclcpp::QoS(rclcpp::KeepLast(1)));
 
     uint32_t frame_ts = 0;
     float robot_x = 0.0f, robot_y = 0.0f, ground_z = 0.0f;
@@ -150,7 +156,20 @@ int main(int argc, char** argv) {
     // Robot-centred rolling window, rasterised from the pool with max-cost aggregation over each
     // cell's footprint. The legacy publisher sampled one 5 cm cell at the centre of each fixed 1 m
     // output cell (a rock off-centre was invisible) and never followed the robot.
+    //
+    // The same pass paints the colour view. Terrain mode is geometry-first, so it is meaningful without
+    // a segmentation network; per output pixel the most severe cell wins, matching the costmap:
+    //   0 no data (near black)   1 carved free space (dark green)   2 flat ground (green)
+    //   3 overhang / passable underneath (teal)   4 rough or uncertain (amber)   5 water/mud label (blue)
+    //   6 lethal step / hard obstacle (red)       cells unseen for > DECAY_WINDOW frames are drawn at half brightness
+    // Elevation mode: colour by h_max above ground, -1 m (blue) .. +2 m (red); free space dark green.
+    // Labels from a segmentation stage (GRAVEL/GRASS/VEGETATION) tint flat ground when present.
     const int GW = max(1, (int)lround(grid_size_m / grid_res));
+    const bool elevation_mode = (color_mode == "elevation");
+    const uint8_t TERRAIN_RGB[7][3] = {{22, 24, 28}, {38, 72, 52}, {76, 170, 84}, {60, 160, 170},
+                                       {232, 170, 40}, {60, 120, 225}, {225, 40, 40}};
+    const uint8_t LABEL_RGB[4][3] = {{150, 140, 125}, {120, 190, 90}, {40, 110, 50}, {0, 0, 0}};   // gravel, grass, vegetation
+    vector<uint8_t> severity, rgb;
     auto publish_grid = [&]() {
         if (!have_pose) return;
         nav_msgs::msg::OccupancyGrid out;
@@ -165,15 +184,22 @@ int main(int argc, char** argv) {
         out.info.origin.position.y = oy;
         out.info.origin.orientation.w = 1.0;
         out.data.assign((size_t)GW * GW, -1);
+        bool want_image = publish_image && image_pub->get_subscription_count() > 0;
+        if (want_image) {
+            severity.assign((size_t)GW * GW, 0);
+            rgb.assign((size_t)GW * GW * 3, 0);
+            for (size_t k = 0; k < (size_t)GW * GW; k++)
+                for (int ch = 0; ch < 3; ch++) rgb[k * 3 + ch] = TERRAIN_RGB[0][ch];
+        }
 
         for (int i = 0; i < HASH_TABLE_SIZE; i++) {
             const GridCell& c = g_hash_pool[i];
             if (!c.valid) continue;
+            bool stale = frame_ts > c.last_update_ts && frame_ts - c.last_update_ts > (uint32_t)DECAY_WINDOW;
             int8_t cost;
             if      (c.obstacle_flag == 1)                            cost = 100;
             else if (c.hit_count == 0)                                cost = 0;     // carved free space
-            else if (frame_ts > c.last_update_ts && frame_ts - c.last_update_ts > (uint32_t)DECAY_WINDOW &&
-                     c.traversability < DECAY_MIN_TRAV)               continue;     // decayed -> unknown
+            else if (stale && c.traversability < DECAY_MIN_TRAV)      continue;     // decayed -> unknown
             else if (c.semantic_label == 4 || c.semantic_label == 5)  cost = 100;   // OBSTACLE_HARD / WATER_MUD
             else {
                 float conf  = fminf((float)c.hit_count / 10.0f, 1.0f);
@@ -185,13 +211,63 @@ int main(int argc, char** argv) {
             int y0 = (int)floor((c.iy * cs - oy) / grid_res), y1 = (int)floor(((c.iy + 1) * cs - oy) / grid_res - 1e-4);
             if (x1 < 0 || y1 < 0 || x0 >= GW || y0 >= GW) continue;
             x0 = max(x0, 0); y0 = max(y0, 0); x1 = min(x1, GW - 1); y1 = min(y1, GW - 1);
+
+            uint8_t sev = 0, col[3] = {0, 0, 0};
+            if (want_image) {
+                if (c.hit_count == 0) {
+                    sev = 1;
+                    for (int ch = 0; ch < 3; ch++) col[ch] = TERRAIN_RGB[1][ch];
+                } else if (elevation_mode) {
+                    float t = fminf(fmaxf((c.h_max - ground_z + 1.0f) / 3.0f, 0.0f), 1.0f);
+                    sev = (uint8_t)(2 + lround(t * 250.0f));
+                    col[0] = (uint8_t)lround(255.0f * fminf(2.0f * t, 1.0f));
+                    col[1] = (uint8_t)lround(255.0f * (1.0f - fabsf(2.0f * t - 1.0f)));
+                    col[2] = (uint8_t)lround(255.0f * fminf(2.0f - 2.0f * t, 1.0f));
+                } else {
+                    if      (cost == 100 && c.semantic_label == 5 && c.obstacle_flag != 1) sev = 5;
+                    else if (cost == 100)                                               sev = 6;
+                    else if (c.obstacle_flag == 2)                                      sev = 4;
+                    else if (c.h_min - ground_z > 0.50f)                                sev = 3;
+                    else                                                                sev = 2;
+                    for (int ch = 0; ch < 3; ch++) col[ch] = TERRAIN_RGB[sev][ch];
+                    if (sev == 2 && c.semantic_label >= 1 && c.semantic_label <= 3)
+                        for (int ch = 0; ch < 3; ch++) col[ch] = LABEL_RGB[c.semantic_label - 1][ch];
+                }
+                if (stale) for (int ch = 0; ch < 3; ch++) col[ch] = (uint8_t)(col[ch] / 2);
+            }
             for (int y = y0; y <= y1; y++)
                 for (int x = x0; x <= x1; x++) {
                     int8_t& v = out.data[(size_t)y * GW + x];
                     if (cost > v) v = cost;
+                    if (want_image) {
+                        size_t k = (size_t)(GW - 1 - y) * GW + x;               // north up
+                        if (sev >= severity[k]) {
+                            severity[k] = sev;
+                            memcpy(&rgb[k * 3], col, 3);
+                        }
+                    }
                 }
         }
         grid_pub->publish(out);
+
+        if (want_image) {
+            int cx = (int)floor((robot_x - ox) / grid_res), cy = GW - 1 - (int)floor((robot_y - oy) / grid_res);
+            for (int d = -3; d <= 3; d++) {                                     // white cross on the robot
+                for (auto [px, py] : {pair<int, int>{cx + d, cy}, pair<int, int>{cx, cy + d}}) {
+                    if (px < 0 || py < 0 || px >= GW || py >= GW) continue;
+                    memset(&rgb[((size_t)py * GW + px) * 3], 255, 3);
+                }
+            }
+            sensor_msgs::msg::Image img;
+            img.header       = out.header;
+            img.height       = GW;
+            img.width        = GW;
+            img.encoding     = "rgb8";
+            img.is_bigendian = 0;
+            img.step         = 3 * GW;
+            img.data         = rgb;
+            image_pub->publish(img);
+        }
     };
 
     auto cloud_sub = node->create_subscription<sensor_msgs::msg::PointCloud2>(
