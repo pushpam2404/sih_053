@@ -108,6 +108,24 @@ data/rellis/**/*.label
 *.engine
 *.plan
 
+# --- Segmentation training artifacts ---
+# The range-image cache is ~3.5 GB (256 KB x 13,556 scans) and is reproducible in minutes from
+# the raw dataset via scripts/build_range_cache.py, so it is a build product, not a source.
+cache/
+*_cache/
+runs/
+checkpoints/
+*.ckpt
+last.pt
+best.pt
+# Raw RELLIS-3D / GOOSE trees, if extracted inside the repo (14 GB and 10 GB respectively)
+Rellis-3D/
+GOOSE/
+goose/
+# configs/ is deliberately NOT ignored: class_weights.json, norm_stats.json and projection.json
+# are small, derived from the training split, and are the provenance for how a model was trained.
+# A checkpoint without them cannot be deployed correctly.
+
 # --- Local Agent Workspace & Internal Cache ---
 .agents/
 .cache/

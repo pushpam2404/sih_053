@@ -10,6 +10,9 @@ pybind11>=2.10.0
 
 # Deployment & Serialization
 onnx>=1.14.0
+# Runtime for the exported segmentation graph. Measured 11x faster than the PyTorch path on CPU
+# (39.7 vs 432 ms/scan incl. projection + kNN), so it is the deploy path, not an optional extra.
+onnxruntime>=1.16.0
 
 # Testing & Quality
 pytest>=7.0.0
