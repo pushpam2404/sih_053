@@ -12,7 +12,8 @@ moving objects, and writes ONE self-contained HTML file (no external assets) wit
   * per-stage latency (mean / p95) and dynamic-object detection by range
 
 What this is NOT: the per-point labels are the simulator's ground truth, not the segmentation network
-(scripts/eval.py shows the shipped checkpoint is at chance level), and the scene has no occlusion.
+(scripts/eval.py shows the shipped checkpoint is at chance level). The scene DOES model occlusion
+(nearest-return-per-azimuth; pass --no-occlusion to reproduce the old idealised behaviour for comparison).
 On the vehicle the live view is RViz on /map; this script is the offline, laptop-runnable demo.
 
 Usage:
@@ -34,6 +35,10 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "lib"))
 sys.path.insert(0, REPO_ROOT)
 import drdo_map  # noqa: E402
 from drdo_lidar_mapping.perception.dynamic import DynamicObstacleDetector  # noqa: E402
+from drdo_lidar_mapping.perception.classify import classify_extent  # noqa: E402
+from drdo_lidar_mapping.segmentation.taxonomy import (  # noqa: E402
+    OBJ_NAMES, OBJ_RGB, OBJ_NONE, OBJ_PERSON, OBJ_VEHICLE, OBJ_POLE, OBJ_WALL, OBJ_STRUCTURE,
+)
 
 HZ = 10.0
 MOUNT_H = 1.2
@@ -45,9 +50,24 @@ MOVERS = ("pedestrian", "pedestrian2", "vehicle")
 CLASS_NAMES = ["GROUND", "GRAVEL_DIRT", "GRASS_LOW", "VEGETATION", "OBSTACLE_HARD", "WATER_MUD", "UNKNOWN"]
 TERRAIN_RGB = np.array([[22, 24, 28], [38, 72, 52], [76, 170, 84], [60, 160, 170],
                         [232, 170, 40], [60, 120, 225], [225, 40, 40]], np.uint8)
+NEG_OBSTACLE_RGB = np.array([120, 0, 55], np.uint8)   # obstacle_flag==3 (pothole/trench) — dark magenta,
+                                                       # distinct from OBSTACLE_HARD's red so a reviewer
+                                                       # can tell "don't drive over" from "can't drive through"
 LABEL_RGB = np.array([[150, 140, 125], [120, 190, 90], [40, 110, 50]], np.uint8)
 PALETTE = np.array([[196, 170, 120], [150, 140, 125], [120, 190, 90], [40, 110, 50],
                     [220, 50, 50], [60, 120, 220], [150, 150, 150]], np.uint8)
+
+# Ground truth for the classification-accuracy panel: the simulator already knows what each scene
+# object IS (make_scene below); this maps that bookkeeping name to the taxonomy's OBJ_* id so the
+# geometric classifier's verdict can be scored against a real answer instead of just "moving or not".
+# Trees are deliberately excluded: OBJ_* (segmentation/taxonomy.py) has no tree class — vegetation is
+# scored by the ADL-1 semantic layer, not this object layer — so grading trees here would be scoring
+# the classifier against a label it was never meant to produce.
+GT_OBJ_CLASS = {"wall": OBJ_WALL, "vehicle": OBJ_VEHICLE, "parked_car": OBJ_VEHICLE,
+                "pedestrian": OBJ_PERSON, "pedestrian2": OBJ_PERSON, "standing_person": OBJ_PERSON}
+for _i in range(6):
+    GT_OBJ_CLASS[f"pole{_i}"] = OBJ_POLE
+CLS_RANGE_BINS = [(0, 10), (10, 25), (25, 40), (40, 100)]
 
 
 # ── Scene ────────────────────────────────────────────────────────────────────────────────────────
@@ -84,18 +104,29 @@ def box_at(b, t):
     return b[0] + b[6] * t, b[1] + b[7] * t
 
 
-def sample_scan(boxes, t, sx, sy, rng):
+def sample_scan(boxes, t, sx, sy, rng, occlusion=True):
     """Returns (N, 4) float32 [x, y, z, label] in the world frame. Ground from the OS1-64 beam pattern;
-    object faces sampled at the sensor's angular density (26,500 / r^2 points per m^2)."""
+    object faces sampled at the sensor's angular density (26,500 / r^2 points per m^2).
+
+    Occlusion: every object in this scene (0.5-6 m) is taller than the 1.2 m mount, so a straight beam
+    from the sensor can never clear an object and reach ground behind it — the ray's height at any
+    range R beyond an object at range r_obj is MOUNT_H*(1 - r_obj/R), which only reaches h_obj as
+    R -> inf. That makes a per-azimuth-column "nearest range wins" horizon exact for this scene
+    (not just a convenient approximation): bin every candidate return (ground ray + every object-face
+    point already generated below) into the same N_COLS azimuth columns the sensor itself scans in,
+    and for each column discard anything farther than the column's nearest hit. One wall in front of
+    the terrain now shadows both the ground and every object behind it, instead of the pre-occlusion
+    model where every object was visible through every other one regardless of range."""
     az = np.linspace(-np.pi, np.pi, N_COLS, endpoint=False)
     down = ELEV[ELEV < -0.01]
     r = (MOUNT_H / np.tan(-down))[:, None] * np.ones((1, N_COLS))
     r = r * (1.0 + rng.normal(0, 0.003, r.shape))
-    gx, gy = sx + r * np.cos(az), sy + r * np.sin(az)
+    col2d = np.broadcast_to(np.arange(N_COLS), r.shape)
     keep = r <= 100.0
-    gx, gy = gx[keep], gy[keep]
+    gx, gy, gr, gcol = (sx + r * np.cos(az))[keep], (sy + r * np.sin(az))[keep], r[keep], col2d[keep]
     ground = np.stack([gx, gy, terrain_height(gx, gy) + rng.normal(0, 0.01, gx.shape), terrain_label(gx, gy)], 1)
-    parts = [ground]
+
+    opx, opy, opz, olab, ocol, odist = [], [], [], [], [], []
     for b in boxes:
         cx, cy = box_at(b, t)
         hx, hy, hz = b[2] / 2, b[3] / 2, b[4]
@@ -119,7 +150,33 @@ def sample_scan(boxes, t, sx, sy, rng):
             pz = terrain_height(px, py) + v * hz
             el = np.arctan2(pz, np.hypot(px - sx, py - sy))
             m = np.abs(el) <= np.deg2rad(22.5)
-            parts.append(np.stack([px[m], py[m], pz[m], np.full(m.sum(), b[5], np.float64)], 1))
+            pxm, pym, pzm = px[m], py[m], pz[m]
+            opx.append(pxm); opy.append(pym); opz.append(pzm)
+            olab.append(np.full(m.sum(), b[5], np.float64))
+            distm = np.hypot(pxm - sx, pym - sy)
+            odist.append(distm)
+            ocol.append((((np.arctan2(pym - sy, pxm - sx) + np.pi) / (2 * np.pi) * N_COLS)
+                        .astype(np.int64) % N_COLS))
+    opx = np.concatenate(opx) if opx else np.empty(0)
+    opy = np.concatenate(opy) if opy else np.empty(0)
+    opz = np.concatenate(opz) if opz else np.empty(0)
+    olab = np.concatenate(olab) if olab else np.empty(0)
+    ocol = np.concatenate(ocol) if ocol else np.empty(0, np.int64)
+    odist = np.concatenate(odist) if odist else np.empty(0)
+
+    if occlusion:
+        EPS = 0.05                                                       # face-sampling jitter tolerance
+        horizon = np.full(N_COLS, np.inf)
+        if ocol.size:
+            np.minimum.at(horizon, ocol, odist)
+        ground = ground[gr <= horizon[gcol] + EPS]
+        if ocol.size:
+            m = odist <= horizon[ocol] + EPS
+            opx, opy, opz, olab = opx[m], opy[m], opz[m], olab[m]
+
+    parts = [ground]
+    if opx.size:
+        parts.append(np.stack([opx, opy, opz, olab], 1))
     return np.concatenate(parts).astype(np.float32)
 
 
@@ -158,6 +215,8 @@ def layer_colours(cells, frame_ts):
     cost[~hit] = [30, 90, 60, 255]
     lethal = (cells["obstacle_flag"] == 1) | np.isin(cells["semantic_label"], [4, 5]) & hit
     cost[lethal] = [255, 0, 60, 255]
+    negative = cells["obstacle_flag"] == 3                               # pothole/trench, if the engine emits it
+    cost[negative] = np.concatenate([NEG_OBSTACLE_RGB, [255]])
     # Terrain: the colours grid_map_node publishes on /drdo/map_image (geometry first; see the node).
     terr = np.zeros((n, 4), np.uint8)
     terr[:, 3] = 255
@@ -170,6 +229,7 @@ def layer_colours(cells, frame_ts):
     terr[hit & (lab == 5) & (cells["obstacle_flag"] != 1), :3] = TERRAIN_RGB[5]
     terr[(cells["obstacle_flag"] == 1) | (hit & (lab == 4)), :3] = TERRAIN_RGB[6]
     terr[~hit, :3] = TERRAIN_RGB[1]
+    terr[negative, :3] = NEG_OBSTACLE_RGB                                 # drawn last: never masked by hit/label
     seen = np.maximum(cells["last_update_ts"], cells["carve_ts"]).astype(np.int64)
     stale = (frame_ts - seen) > 50
     for arr in (sem, ele, cost, terr):
@@ -224,8 +284,12 @@ def main():
     ap.add_argument("--snapshots", type=int, default=8)
     ap.add_argument("--no-labels", action="store_true",
                     help="insert every point as UNKNOWN, i.e. the live system without a segmentation network")
+    ap.add_argument("--no-occlusion", action="store_true",
+                    help="disable per-azimuth occlusion (the pre-occlusion behaviour: every object visible "
+                         "through every other one), kept only so the old numbers stay reproducible for comparison")
     ap.add_argument("--out", default=os.path.join(REPO_ROOT, "reports", "map_dashboard.html"))
     args = ap.parse_args()
+    occlusion = not args.no_occlusion
 
     rng = np.random.default_rng(26053)
     boxes = make_scene(rng)
@@ -236,11 +300,12 @@ def main():
     snapshots, load_hist, dyn_eval = [], [], []
     false_dyn_frames, dyn_track_frames = 0, 0
     first_seen, confirm_delay = {}, {}
+    cls_eval = []           # (true_obj_cls, pred_obj_cls, range_m, source) — see classification panel below
 
     for f in range(1, args.frames + 1):
         t = (f - 1) / HZ
         sx, sy = args.speed * t, 0.0
-        scan = sample_scan(boxes, t, sx, sy, rng)
+        scan = sample_scan(boxes, t, sx, sy, rng, occlusion=occlusion)
 
         t0 = time.perf_counter()
         # Geometry only (no semantic labels): the same module the ROS node runs.
@@ -277,11 +342,32 @@ def main():
                 first_seen.pop(b[8], None)
                 continue
             first_seen.setdefault(b[8], f)
-            found = any(np.hypot(ob.x - bx, ob.y - by) < 1.5 for ob in dyn)
+            matched = min(dyn, key=lambda ob: np.hypot(ob.x - bx, ob.y - by), default=None)
+            found = matched is not None and np.hypot(matched.x - bx, matched.y - by) < 1.5
             if found and b[8] not in confirm_delay:
                 confirm_delay[b[8]] = (f - first_seen[b[8]]) / HZ
             if f - first_seen[b[8]] >= 10:                               # score after a 1 s confirmation window
                 dyn_eval.append((b[8], rng_m, found))
+                # Classification: score the REAL measured verdict from the tracker (clustered from the
+                # actual, possibly-occluded point cloud), not a re-run of classify_extent on ground truth —
+                # this is the one place the panel below tests the full detect-then-classify pipeline.
+                if found and b[8] in GT_OBJ_CLASS:
+                    cls_eval.append((GT_OBJ_CLASS[b[8]], matched.obj_class, rng_m, "tracked"))
+
+        # Static named objects (wall, poles, parked car, standing person) never enter the mover tracker,
+        # so there is no clustered extent to classify. classify_extent is called directly on each
+        # object's own (length, width, height) — the simulator's ground truth, not a measurement — which
+        # tests the classifier's decision boundaries against the true scene sizes rather than the extent-
+        # extraction pipeline. Trees are excluded (see GT_OBJ_CLASS comment above).
+        for b in boxes:
+            if b[8] in MOVERS or b[8] not in GT_OBJ_CLASS:
+                continue
+            bx, by = box_at(b, t)
+            rng_m = float(np.hypot(bx - sx, by - sy))
+            if rng_m > 100.0:
+                continue
+            pred_cls, _ = classify_extent(b[2], b[3], b[4])
+            cls_eval.append((GT_OBJ_CLASS[b[8]], int(pred_cls), rng_m, "ground_truth_extent"))
 
         if f % snap_every == 0 or f == args.frames:
             cells = drdo_map.export_cells()
@@ -296,7 +382,9 @@ def main():
                 "frame": f, "time_s": round(t, 1), "robot": [sx, sy], "near": near_imgs, "far": far_imgs, "zoom": zoom_imgs,
                 "near_px": near_px, "far_px": far_px, "cells": int(len(cells["ix"])), "levels": lv_counts,
                 "tracks": [{"x": ob.x - sx, "y": ob.y - sy, "w": ob.length, "h": ob.width, "speed": ob.speed,
-                            "id": ob.track_id, "dynamic": True} for ob in dyn],
+                            "id": ob.track_id, "dynamic": True, "cls": int(ob.obj_class),
+                            "cls_name": OBJ_NAMES[ob.obj_class], "cls_conf": round(float(ob.obj_conf), 2)}
+                           for ob in dyn],
                 "truth": truth,
             })
             print(f"[DASH] frame {f:4d}  cells={len(cells['ix']):7d}  levels={lv_counts}  "
@@ -320,6 +408,21 @@ def main():
         rows = [e for e in dyn_eval if lo <= e[1] < hi]
         by_range.append({"range": f"{lo}-{hi} m", "frames": len(rows),
                          "recall": (sum(e[2] for e in rows) / len(rows)) if rows else None})
+
+    # Classification accuracy by range + confusion matrix (problem statement: "high accuracy in object
+    # classification across varying distances"). true/pred are OBJ_* ids; see GT_OBJ_CLASS and the two
+    # scoring loops above for what "tracked" (movers) vs "ground_truth_extent" (statics) means.
+    n_obj = len(OBJ_NAMES)
+    confusion = np.zeros((n_obj, n_obj), np.int64)
+    for true_c, pred_c, _, _ in cls_eval:
+        confusion[true_c, pred_c] += 1
+    cls_by_range = []
+    for lo, hi in CLS_RANGE_BINS:
+        rows = [e for e in cls_eval if lo <= e[2] < hi]
+        correct = sum(1 for e in rows if e[0] == e[1])
+        cls_by_range.append({"range": f"{lo}-{hi} m", "n": len(rows),
+                             "accuracy": (correct / len(rows)) if rows else None})
+    overall_correct = sum(1 for e in cls_eval if e[0] == e[1])
     summary = {
         "frames": args.frames, "speed_mps": args.speed, "distance_m": args.speed * (args.frames - 1) / HZ,
         "mean_scan_points": float(np.mean(stages["scan_points"])), "peak_load": float(max(load_hist)),
@@ -331,6 +434,12 @@ def main():
         "bands": [{"level": i, "cell_cm": round(drdo_map.CELL_RESOLUTIONS[i] * 100),
                    "outer_m": drdo_map.LEVEL_OUTER_R[i]} for i in range(3)],
         "classes": [{"name": n, "rgb": PALETTE[i].tolist()} for i, n in enumerate(CLASS_NAMES)],
+        "occlusion": occlusion,
+        "obj_classes": [{"name": n, "rgb": list(OBJ_RGB[i])} for i, n in enumerate(OBJ_NAMES)],
+        "classification": {
+            "n": len(cls_eval), "overall_accuracy": (overall_correct / len(cls_eval)) if cls_eval else None,
+            "by_range": cls_by_range, "confusion": confusion.tolist(), "obj_names": list(OBJ_NAMES),
+        },
     }
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     with open(args.out, "w") as fh:
@@ -338,7 +447,11 @@ def main():
                       "come from geometry only." if args.no_labels else
                       "Map labels are simulator ground truth (no segmentation network in this loop): they tint the "
                       "semantic layer and mark water/obstacle cells; flat/rough/blocked also come from geometry.")
-        fh.write(HTML.replace("__LABEL_NOTE__", label_note)
+        occl_note = ("Occlusion modelled: each beam keeps only its nearest per-azimuth return, so a wall or vehicle "
+                    "shadows the ground and objects behind it." if occlusion else
+                    "Occlusion DISABLED (--no-occlusion): every object is visible through every other one, "
+                    "the old idealised behaviour, kept only for side-by-side comparison.")
+        fh.write(HTML.replace("__LABEL_NOTE__", label_note).replace("__OCCL_NOTE__", occl_note)
                  .replace("__DATA__", json.dumps({"summary": summary, "snapshots": snapshots})))
     total = sum(latency[k]["mean"] for k in ["insert_ms", "classify_ms", "decay_ms", "purge_ms"])
     print(f"[DASH] map update mean {total:.1f} ms/frame (insert {latency['insert_ms']['mean']:.1f}, "
@@ -350,6 +463,11 @@ def main():
                            for r in by_range)
     print(f"[DASH] moving-object recall by range (after 1 s in range): {recall_txt}; static objects reported "
           f"moving: {false_dyn_frames}/{dyn_track_frames} object-frames; time to confirm: {confirm_delay}")
+    cls_txt = ", ".join(f"{r['range']}=" + ("n/a" if r["accuracy"] is None else f"{100 * r['accuracy']:.0f}% (n={r['n']})")
+                        for r in cls_by_range)
+    overall_txt = "n/a" if not cls_eval else f"{100 * overall_correct / len(cls_eval):.0f}% (n={len(cls_eval)})"
+    print(f"[DASH] occlusion={'ON' if occlusion else 'OFF (--no-occlusion)'}  "
+          f"classification accuracy by range: {cls_txt}; overall {overall_txt}")
     print(f"[DASH] wrote {args.out}")
     return 0
 
@@ -380,18 +498,22 @@ table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td,t
  <button id="play">▶ Play</button><input type="range" id="slider" min="0" value="0"><span id="flabel"></span>
  <span style="flex-basis:100%;height:0"></span>
  <button data-layer="terrain" class="on">Terrain (live view)</button><button data-layer="semantic">Semantic (sim labels)</button><button data-layer="elevation">Elevation</button><button data-layer="cost">Cost</button>
+ <button id="truthbtn">Ground truth</button>
 </div>
 <div class="grid">
  <div class="panel"><h2>Near field ±15 m — cell outlines show 5 / 10 / 50 cm bands</h2><div class="view"><img id="near"><canvas id="nearc" width="1200" height="1200"></canvas></div><div class="legend" id="legend"></div></div>
  <div class="panel"><h2>Zoom 4 × 4 m across the 10 m band edge — every cell outlined</h2><div class="view"><img id="zoom"><canvas id="zoomc" width="800" height="800"></canvas></div><div class="note">Left/below the dashed arc: 5 cm cells; beyond it: 10 cm cells. Each 10 cm cell covers exactly four 5 cm cells (integer nesting from one 5 cm lattice), so nothing is misaligned or double-counted at the transition.</div></div>
- <div class="panel wide"><h2>Far field ±100 m — <span style="color:#ff5ad2">moving objects</span></h2><div class="view"><img id="far"><canvas id="farc" width="800" height="800"></canvas></div>
-  <div class="note">Rings: 10 m (5 cm→10 cm), 25 m (10 cm→50 cm), 100 m (range limit). Dimmed cells: unseen for &gt;5 s (decaying). Dark slate: carved free space with no returns.</div></div>
+ <div class="panel wide"><h2>Far field ±100 m — objects coloured by classified type</h2><div class="view"><img id="far"><canvas id="farc" width="800" height="800"></canvas></div>
+  <div class="legend" id="objlegend"></div>
+  <div class="note">Rings: 10 m (5 cm→10 cm), 25 m (10 cm→50 cm), 100 m (range limit). Dimmed cells: unseen for &gt;5 s (decaying). Dark slate: carved free space with no returns. "Ground truth" overlays the simulator's true mover positions (small yellow rings) so a missed or offset box is visible directly, not just in the recall table.</div></div>
  <div class="panel"><h2>Memory, same 100 m radius</h2><div id="mem"></div><div class="note">Log scale. The fixed pool is preallocated once; "in use" is live cells × 40 B.</div></div>
  <div class="panel"><h2>Latency per frame (host CPU, single thread)</h2><table id="lat"></table><div class="note" id="latnote"></div></div>
  <div class="panel"><h2>Moving-object detection by range</h2><table id="dyn"></table><div class="note">Geometry only (no labels): clusters 0.3–2.5 m above ground, confirmed moving when speed &gt; 1 m/s, the whole footprint shifted and the space it left is empty. Recall counts frames after 1 s in range, matched within 1.5 m. Their points are kept out of the static map. Scene: 2 walkers, 1 oncoming vehicle; parked car, standing person, wall, poles and trees must stay static.</div></div>
+ <div class="panel"><h2>Classification accuracy by range</h2><table id="clsrange"></table><div class="note" id="clsnote"></div></div>
+ <div class="panel"><h2>Confusion matrix (rows = true class, cols = predicted)</h2><div style="overflow-x:auto"><table id="clsconf"></table></div></div>
  <div class="panel"><h2>Cells per resolution level (current frame)</h2><table id="lv"></table></div>
 </div>
-<div class="note" style="margin-top:12px">Synthetic scene, OS1-64 beam pattern, no occlusion. __LABEL_NOTE__ Moving-object detection never uses labels. Generated by scripts/map_dashboard.py.</div>
+<div class="note" style="margin-top:12px">Synthetic scene, OS1-64 beam pattern. __OCCL_NOTE__ __LABEL_NOTE__ Moving-object detection never uses labels. Generated by scripts/map_dashboard.py.</div>
 <script>
 const D=__DATA__, S=D.summary, snaps=D.snapshots; let idx=snaps.length-1, layer='terrain', timer=null;
 const fmt=(v,d=1)=>v==null?'n/a':v.toFixed(d);
@@ -407,14 +529,21 @@ document.getElementById('mem').innerHTML='<table>'+Object.entries(m).map(([k,v])
 document.getElementById('lat').innerHTML='<tr><th>stage</th><th>mean</th><th>p95</th><th>max</th></tr>'+Object.entries(lat).map(([k,v])=>`<tr><td>${k.replace('_ms','')}</td><td>${fmt(v.mean,2)}</td><td>${fmt(v.p95,2)}</td><td>${fmt(v.max,2)}</td></tr>`).join('');
 document.getElementById('latnote').textContent='Timed around the Python→C++ calls, so insert includes the numpy transfer. Perception is Python/scikit-learn.';
 document.getElementById('dyn').innerHTML='<tr><th>range</th><th>object-frames</th><th>recall</th></tr>'+S.dynamic_recall_by_range.map(r=>`<tr><td>${r.range}</td><td>${r.frames}</td><td>${r.recall==null?'n/a':fmt(100*r.recall,0)+'%'}</td></tr>`).join('')+`<tr><td>static objects reported moving</td><td>${S.false_dynamic_track_frames} / ${S.dynamic_track_frames}</td><td>object-frames</td></tr>`+Object.entries(S.confirm_delay_s).map(([k,v])=>`<tr><td>time to confirm: ${k}</td><td></td><td>${fmt(v,1)} s</td></tr>`).join('');
-document.getElementById('legend').innerHTML=S.classes.map(c=>`<span><i class="sw" style="background:rgb(${c.rgb})"></i>${c.name}</span>`).join('')+'<span><i class="sw" style="background:#2d343e"></i>FREE (carved)</span><br><b style="color:var(--fg);font-weight:600">Terrain view:</b> <span><i class="sw" style="background:rgb(76,170,84)"></i>flat</span><span><i class="sw" style="background:rgb(232,170,40)"></i>rough</span><span><i class="sw" style="background:rgb(225,40,40)"></i>blocked</span><span><i class="sw" style="background:rgb(60,160,170)"></i>overhang</span><span><i class="sw" style="background:rgb(60,120,225)"></i>water/mud</span><span><i class="sw" style="background:rgb(38,72,52)"></i>free</span>';
+document.getElementById('legend').innerHTML=S.classes.map(c=>`<span><i class="sw" style="background:rgb(${c.rgb})"></i>${c.name}</span>`).join('')+'<span><i class="sw" style="background:#2d343e"></i>FREE (carved)</span><br><b style="color:var(--fg);font-weight:600">Terrain view:</b> <span><i class="sw" style="background:rgb(76,170,84)"></i>flat</span><span><i class="sw" style="background:rgb(232,170,40)"></i>rough</span><span><i class="sw" style="background:rgb(225,40,40)"></i>blocked</span><span><i class="sw" style="background:rgb(60,160,170)"></i>overhang</span><span><i class="sw" style="background:rgb(60,120,225)"></i>water/mud</span><span><i class="sw" style="background:rgb(38,72,52)"></i>free</span><span><i class="sw" style="background:rgb(120,0,55)"></i>negative obstacle (if engine reports flag 3)</span>';
+document.getElementById('objlegend').innerHTML='<b style="color:var(--fg);font-weight:600">Object class (confirmed movers only):</b> '+S.obj_classes.map(c=>`<span><i class="sw" style="background:rgb(${c.rgb})"></i>${c.name}</span>`).join('')+' <span>· yellow ring = ground truth mover (toggle above)</span>';
 const hashIdx=parseInt((location.hash.match(/snap=(\d+)/)||[])[1]); if(hashIdx>=0&&hashIdx<snaps.length) idx=hashIdx;
 const slider=document.getElementById('slider'); slider.max=snaps.length-1; slider.value=idx;
+let showTruth=false;
+document.getElementById('truthbtn').onclick=e=>{showTruth=!showTruth;e.target.classList.toggle('on',showTruth);render()};
 function overlay(cv,half,s,rings){const g=cv.getContext('2d'),W=cv.width,k=W/(2*half);g.clearRect(0,0,W,W);g.lineWidth=Math.max(1,W/600);
  g.setLineDash([6,6]);g.strokeStyle='rgba(242,184,75,.8)';rings.forEach(r=>{g.beginPath();g.arc(W/2,W/2,r*k,0,7);g.stroke()});g.setLineDash([]);
- s.tracks.forEach(t=>{if(Math.abs(t.x)>half||Math.abs(t.y)>half)return;g.strokeStyle=t.dynamic?'#ff5ad2':'rgba(255,255,255,.8)';g.lineWidth=Math.max(2,W/300);
-  const w=Math.max(t.w*k,W/40),h=Math.max(t.h*k,W/40);g.fillStyle='rgba(255,90,210,.35)';g.fillRect(W/2+t.x*k-w/2,W/2-t.y*k-h/2,w,h);g.lineWidth=Math.max(3,W/200);g.strokeRect(W/2+t.x*k-w/2,W/2-t.y*k-h/2,w,h);
-  if(t.dynamic){g.fillStyle='#ff5ad2';g.font=`bold ${Math.max(14,W/35)}px system-ui`;g.fillText(`#${t.id} ${t.speed.toFixed(1)} m/s`,W/2+t.x*k+w/2+3,W/2-t.y*k)}});
+ s.tracks.forEach(t=>{if(Math.abs(t.x)>half||Math.abs(t.y)>half)return;const rgb=(S.obj_classes[t.cls]||S.obj_classes[0]).rgb,col=`rgb(${rgb})`;
+  g.strokeStyle=col;g.lineWidth=Math.max(2,W/300);
+  const w=Math.max(t.w*k,W/40),h=Math.max(t.h*k,W/40);g.fillStyle=`rgba(${rgb},.35)`;g.fillRect(W/2+t.x*k-w/2,W/2-t.y*k-h/2,w,h);g.lineWidth=Math.max(3,W/200);g.strokeRect(W/2+t.x*k-w/2,W/2-t.y*k-h/2,w,h);
+  g.fillStyle=col;g.font=`bold ${Math.max(14,W/35)}px system-ui`;g.fillText(`#${t.id} ${t.cls_name} ${t.speed.toFixed(1)} m/s`,W/2+t.x*k+w/2+3,W/2-t.y*k)});
+ if(showTruth&&s.truth)s.truth.forEach(tr=>{if(Math.abs(tr.x)>half||Math.abs(tr.y)>half)return;
+  g.strokeStyle='#f2e34b';g.lineWidth=Math.max(2,W/300);g.beginPath();g.arc(W/2+tr.x*k,W/2-tr.y*k,Math.max(6,W/80),0,7);g.stroke();
+  g.fillStyle='#f2e34b';g.font=`${Math.max(11,W/45)}px system-ui`;g.fillText(tr.name,W/2+tr.x*k+8,W/2-tr.y*k+4)});
  g.fillStyle='#f2b84b';g.beginPath();g.moveTo(W/2+10*W/800,W/2);g.lineTo(W/2-6*W/800,W/2-7*W/800);g.lineTo(W/2-6*W/800,W/2+7*W/800);g.fill();}
 function zoomRing(){const cv=document.getElementById('zoomc'),g=cv.getContext('2d'),W=cv.width,h=S.zoom.half,k=W/(2*h),[ax,ay]=S.zoom.at;
  g.clearRect(0,0,W,W);g.setLineDash([10,8]);g.lineWidth=3;g.strokeStyle='rgba(242,184,75,.95)';g.beginPath();g.arc(W/2-ax*k,W/2+ay*k,10*k,0,7);g.stroke();}
@@ -426,6 +555,11 @@ slider.oninput=()=>{idx=+slider.value;render()};
 document.querySelectorAll('[data-layer]').forEach(b=>b.onclick=()=>{layer=b.dataset.layer;document.querySelectorAll('[data-layer]').forEach(x=>x.classList.toggle('on',x===b));render()});
 document.getElementById('play').onclick=e=>{if(timer){clearInterval(timer);timer=null;e.target.textContent='▶ Play';return}
  e.target.textContent='❚❚ Pause';timer=setInterval(()=>{idx=(idx+1)%snaps.length;slider.value=idx;render()},900)};
+const C=S.classification;
+document.getElementById('clsrange').innerHTML='<tr><th>range</th><th>n</th><th>accuracy</th></tr>'+C.by_range.map(r=>`<tr><td>${r.range}</td><td>${r.n}</td><td>${r.accuracy==null?'n/a':fmt(100*r.accuracy,0)+'%'}</td></tr>`).join('')+`<tr><td>overall</td><td>${C.n}</td><td>${C.overall_accuracy==null?'n/a':fmt(100*C.overall_accuracy,0)+'%'}</td></tr>`;
+document.getElementById('clsnote').textContent=`Geometric classifier (perception/classify.py) over (length, width, height); no learned model. Movers scored on the tracker's own measured extent from the (occluded) point cloud; static wall/poles/parked-car/standing-person scored by calling the classifier on the scene's true extent (see the code comment in scripts/map_dashboard.py). Trees carry no ground-truth object class and are excluded.`;
+const cn=C.obj_names;
+document.getElementById('clsconf').innerHTML='<tr><th>true \\ pred</th>'+cn.map(n=>`<th>${n}</th>`).join('')+'</tr>'+C.confusion.map((row,i)=>`<tr><td>${cn[i]}</td>`+row.map((v,j)=>`<td style="${i===j&&v>0?'color:#7ee08a':''}">${v}</td>`).join('')+'</tr>').join('');
 render();
 </script></body></html>"""
 

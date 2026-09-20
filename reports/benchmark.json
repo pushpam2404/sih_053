@@ -1,0 +1,95 @@
+{
+  "host_cpu": "Apple M4",
+  "host_platform": "macOS-27.0-arm64-arm-64bit",
+  "note": "Apple M4 laptop, single-threaded Python/pybind11 call path. No Jetson Orin numbers exist for this project (CLAUDE.md: CUDA kernels never compiled with nvcc, no ROS run on a vehicle) \u2014 do not extrapolate these numbers to Orin.",
+  "scan_model": {
+    "beams": 64,
+    "azimuth_cols": 1024,
+    "raw_returns_per_sweep": 65536
+  },
+  "frames_measured": 200,
+  "frames_warmup": 5,
+  "speed_mps": 8.33,
+  "purge_every_n_frames": 10,
+  "sensor_hz": 10.0,
+  "budget_ms": 100.0,
+  "headline": {
+    "mean_frame_ms": 51.80392584510628,
+    "p95_frame_ms": 60.19234230079746,
+    "max_frame_ms": 68.0250840014196,
+    "achievable_hz": 19.3035563171409,
+    "clears_10hz_budget": true,
+    "mean_inserted_points_per_frame": 53234.575,
+    "mean_dropped_as_moving_per_frame": 0.105
+  },
+  "stages_ms": {
+    "moving_object_detection": {
+      "mean_ms": 3.2158243250160012,
+      "p95_ms": 3.394975352784968,
+      "max_ms": 4.858125001192093,
+      "n": 200
+    },
+    "engine_insert_points": {
+      "mean_ms": 18.952667500125244,
+      "p95_ms": 19.899168449592253,
+      "max_ms": 20.859165997535456,
+      "n": 200
+    },
+    "classify_dirty": {
+      "mean_ms": 0.5069172200819594,
+      "p95_ms": 0.5787975998828186,
+      "max_ms": 0.8140000027196947,
+      "n": 200
+    },
+    "decay_kernel": {
+      "mean_ms": 0.9453416098585876,
+      "p95_ms": 5.014593450505345,
+      "max_ms": 5.224000000453088,
+      "n": 200
+    },
+    "purge_distant_actual_when_run": {
+      "mean_ms": 6.3419563506613486,
+      "p95_ms": 6.6407173029801925,
+      "max_ms": 6.764375000784639,
+      "n": 20
+    },
+    "purge_distant_amortised_per_frame_ms": 0.6341956350661349,
+    "rasterize_approx_python": {
+      "mean_ms": 27.1364622650799,
+      "p95_ms": 29.419552401486722,
+      "max_ms": 45.00199999893084,
+      "n": 200
+    }
+  },
+  "classify_extent_standalone": {
+    "us_per_call": 1.0700124999857508,
+    "n_calls": 20000,
+    "note": "classify_extent() is called inline inside DynamicObstacleDetector.update() per confirmed track, so its cost is already folded into moving_object_detection above for any frame with confirmed movers; this synthetic load-test scan has none, so it is also measured standalone here."
+  },
+  "insert_cost_by_range_band": {
+    "0-10m": {
+      "mean_points_per_frame": 25015.5,
+      "mean_insert_ms": 4.994772200613322,
+      "us_per_point": 0.19966709442598876,
+      "cell_size_m": 0.05
+    },
+    "10-25m": {
+      "mean_points_per_frame": 10375.933333333332,
+      "mean_insert_ms": 3.158493066439405,
+      "us_per_point": 0.3044056823584775,
+      "cell_size_m": 0.1
+    },
+    "25-50m": {
+      "mean_points_per_frame": 9645.533333333333,
+      "mean_insert_ms": 0.9691819665022194,
+      "us_per_point": 0.100479873223069,
+      "cell_size_m": 0.5
+    },
+    "50-100m": {
+      "mean_points_per_frame": 15423.5,
+      "mean_insert_ms": 2.2661791338274875,
+      "us_per_point": 0.14693027742260106,
+      "cell_size_m": 0.5
+    }
+  }
+}
