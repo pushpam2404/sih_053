@@ -139,8 +139,8 @@ __global__ void decay_stale_cells_kernel(
 
     if (current_ts > c.last_update_ts && (current_ts - c.last_update_ts) > decay_window) {
         c.traversability *= decay_factor;
-        if (c.traversability < decay_min_trav && c.obstacle_flag == 1)
-            c.obstacle_flag = 2;
+        if (c.traversability < decay_min_trav && (c.obstacle_flag == 1 || c.obstacle_flag == 3))
+            c.obstacle_flag = 2;   // stale obstacle, positive or negative, demotes to unknown
     }
 }
 
@@ -150,6 +150,43 @@ __global__ void decay_stale_cells_kernel(
 
 __constant__ float d_SEM_TRAV[8] = {1.0f, 0.8f, 0.65f, 0.15f, 0.0f, 0.0f, 0.4f, -1.0f};
 
+// Read-only probe. d_lookup_or_insert() must NOT be used for the rim test below: it allocates on a
+// miss, so probing twelve neighbours of every deep cell would materialise phantom cells all around
+// each pothole and inflate the pool. This mirrors the CPU lookup_cell() — stop at the first empty
+// slot, never write.
+__device__ GridCell* d_lookup(GridCell* pool, int32_t ix, int32_t iy, uint8_t level) {
+    int bucket = d_spatial_hash(ix, iy, level);
+    for (int p = 0; p < MAX_PROBE; p++) {
+        GridCell& c = pool[(bucket + p) & (HASH_TABLE_SIZE - 1)];
+        unsigned int m = *d_meta(c);
+        if (m == 0) return nullptr;                                         // empty: key absent
+        if (m == META_CLAIM) continue;                                      // mid-insert, skip
+        if (c.ix == ix && c.iy == iy && ((m >> 16) & 0xFFu) == level) return &c;
+    }
+    return nullptr;
+}
+
+// Mirrors has_ground_rim() in src/drdo_map.cpp — keep the two in step, as with d_spatial_hash.
+// Race-free despite every thread classifying concurrently: the only neighbour fields read here,
+// hit_count and h_max, are written by update_height_kernel in an EARLIER launch and are stable by
+// the time this kernel runs. obstacle_flag is the only field written concurrently, and is not read.
+__device__ bool d_has_ground_rim(GridCell* pool, const GridCell& c, float ground_z) {
+    uint8_t lv = c.level < NUM_LEVELS ? c.level : NUM_LEVELS - 1;
+    int32_t r = (int32_t)(NEG_RIM_RADIUS_M / CELL_RESOLUTIONS[lv]);
+    if (r < 1) r = 1;
+    const int32_t off[12][2] = {
+        {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+        {r, 0}, {-r, 0}, {0, r}, {0, -r},
+        {r, r}, {r, -r}, {-r, r}, {-r, -r},
+    };
+    for (int k = 0; k < 12; k++) {
+        GridCell* n = d_lookup(pool, c.ix + off[k][0], c.iy + off[k][1], lv);
+        if (!n || n->hit_count == 0) continue;
+        if (n->h_max >= ground_z - NEG_RIM_TOL) return true;
+    }
+    return false;
+}
+
 __global__ void classify_and_score_kernel(GridCell* pool, float ground_z, uint32_t frame_ts) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= HASH_TABLE_SIZE) return;
@@ -158,12 +195,18 @@ __global__ void classify_and_score_kernel(GridCell* pool, float ground_z, uint32
     if (!(*d_meta(c) & META_VALID) || c.hit_count == 0 || c.last_update_ts != frame_ts) return;
 
     float hs = c.h_max - c.h_min, cl = c.h_min - ground_z, ma = c.h_max - ground_z;
-    if      (hs < 0.05f) c.obstacle_flag = 0;
+    float db = ground_z - c.h_max;                  // > 0 when the cell sits under the ground plane
+    // Negative-obstacle branch first, exactly as on the CPU: a pothole floor is flat, so the
+    // hs < 0.05 test below would otherwise call a 40 cm hole drivable ground.
+    if      (db > NEG_OBST_DEPTH && c.hit_count >= NEG_MIN_HITS
+             && d_has_ground_rim(pool, c, ground_z))
+                         c.obstacle_flag = 3;
+    else if (hs < 0.05f) c.obstacle_flag = 0;
     else if (cl > 0.50f) c.obstacle_flag = 0;
     else if (ma > 0.30f) c.obstacle_flag = 1;
     else                 c.obstacle_flag = 2;
 
-    if (c.obstacle_flag == 1) { c.traversability = 0.0f; return; }
+    if (c.obstacle_flag == 1 || c.obstacle_flag == 3) { c.traversability = 0.0f; return; }
     float rough = (c.hit_count > 1) ? sqrtf(fmaxf(c.h_variance_M2, 0.0f) / (float)(c.hit_count - 1)) : 0.0f;
     float hs_sc = expf(-5.0f * rough);
     float ss_sc = d_SEM_TRAV[c.semantic_label < 7 ? c.semantic_label : 6];

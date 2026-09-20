@@ -161,13 +161,16 @@ int main(int argc, char** argv) {
     // a segmentation network; per output pixel the most severe cell wins, matching the costmap:
     //   0 no data (near black)   1 carved free space (dark green)   2 flat ground (green)
     //   3 overhang / passable underneath (teal)   4 rough or uncertain (amber)   5 water/mud label (blue)
-    //   6 lethal step / hard obstacle (red)       cells unseen for > DECAY_WINDOW frames are drawn at half brightness
+    //   6 lethal step / hard obstacle (red)       7 negative obstacle — pothole / trench (indigo)
+    //   cells unseen for > DECAY_WINDOW frames are drawn at half brightness
+    // 7 outranks 6 in the max-severity aggregation: a hole and a rock are both lethal, but they
+    // need different colours or a reviewer cannot tell that negative obstacles are detected at all.
     // Elevation mode: colour by h_max above ground, -1 m (blue) .. +2 m (red); free space dark green.
     // Labels from a segmentation stage (GRAVEL/GRASS/VEGETATION) tint flat ground when present.
     const int GW = max(1, (int)lround(grid_size_m / grid_res));
     const bool elevation_mode = (color_mode == "elevation");
-    const uint8_t TERRAIN_RGB[7][3] = {{22, 24, 28}, {38, 72, 52}, {76, 170, 84}, {60, 160, 170},
-                                       {232, 170, 40}, {60, 120, 225}, {225, 40, 40}};
+    const uint8_t TERRAIN_RGB[8][3] = {{22, 24, 28}, {38, 72, 52}, {76, 170, 84}, {60, 160, 170},
+                                       {232, 170, 40}, {60, 120, 225}, {225, 40, 40}, {75, 35, 130}};
     const uint8_t LABEL_RGB[4][3] = {{150, 140, 125}, {120, 190, 90}, {40, 110, 50}, {0, 0, 0}};   // gravel, grass, vegetation
     vector<uint8_t> severity, rgb;
     auto publish_grid = [&]() {
@@ -198,6 +201,7 @@ int main(int argc, char** argv) {
             bool stale = frame_ts > c.last_update_ts && frame_ts - c.last_update_ts > (uint32_t)DECAY_WINDOW;
             int8_t cost;
             if      (c.obstacle_flag == 1)                            cost = 100;
+            else if (c.obstacle_flag == 3)                            cost = 100;   // pothole/trench: as lethal as a rock
             else if (c.hit_count == 0)                                cost = 0;     // carved free space
             else if (stale && c.traversability < DECAY_MIN_TRAV)      continue;     // decayed -> unknown
             else if (c.semantic_label == 4 || c.semantic_label == 5)  cost = 100;   // OBSTACLE_HARD / WATER_MUD
@@ -224,7 +228,8 @@ int main(int argc, char** argv) {
                     col[1] = (uint8_t)lround(255.0f * (1.0f - fabsf(2.0f * t - 1.0f)));
                     col[2] = (uint8_t)lround(255.0f * fminf(2.0f - 2.0f * t, 1.0f));
                 } else {
-                    if      (cost == 100 && c.semantic_label == 5 && c.obstacle_flag != 1) sev = 5;
+                    if      (c.obstacle_flag == 3)                                      sev = 7;
+                    else if (cost == 100 && c.semantic_label == 5 && c.obstacle_flag != 1) sev = 5;
                     else if (cost == 100)                                               sev = 6;
                     else if (c.obstacle_flag == 2)                                      sev = 4;
                     else if (c.h_min - ground_z > 0.50f)                                sev = 3;

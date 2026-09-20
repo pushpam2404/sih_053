@@ -146,20 +146,56 @@ void raycast_band(float rx, float ry, float wx, float wy, uint8_t level, uint32_
                       cell_index(wx, level), cell_index(wy, level), level, ts);
 }
 
+// Does any nearby cell still stand at roughly ground level? Probes the 4 immediate neighbours plus
+// 8 directions on a ring ~NEG_RIM_RADIUS_M out, so the inside of a pothole up to about 1.5 m across
+// still sees its own rim. 12 O(1) hash lookups, and only for cells that already failed the depth
+// test, so this costs nothing on normal terrain.
+//
+// Larger depressions only get their boundary ring flagged, which is operationally sufficient: a
+// lethal rim encloses the hole, so no path can enter it. What this deliberately does NOT do is
+// flag terrain that is merely low — see NEG_OBST_DEPTH's comment on slopes.
+bool has_ground_rim(const GridCell& c, float ground_z) {
+    uint8_t lv = c.level < NUM_LEVELS ? c.level : NUM_LEVELS - 1;
+    int32_t r = (int32_t)(NEG_RIM_RADIUS_M / CELL_RESOLUTIONS[lv]);
+    if (r < 1) r = 1;
+    const int32_t off[12][2] = {
+        {1, 0}, {-1, 0}, {0, 1}, {0, -1},                       // immediate neighbours
+        {r, 0}, {-r, 0}, {0, r}, {0, -r},                       // ring, axis-aligned
+        {r, r}, {r, -r}, {-r, r}, {-r, -r},                     // ring, diagonal
+    };
+    for (int k = 0; k < 12; k++) {
+        GridCell* n = lookup_cell(c.ix + off[k][0], c.iy + off[k][1], lv);
+        if (!n || n->hit_count == 0) continue;
+        if (n->h_max >= ground_z - NEG_RIM_TOL) return true;
+    }
+    return false;
+}
+
 void classify_obstacle(GridCell& c, float ground_z) {
     if (c.hit_count == 0) return;
     float step_height = c.h_max - c.h_min;
     float clearance   = c.h_min - ground_z;
     float max_above   = c.h_max - ground_z;
+    float depth_below = ground_z - c.h_max;   // > 0 when the whole cell sits under the ground plane
 
-    if      (step_height < 0.05f) c.obstacle_flag = 0; // Flat Ground
+    // Negative obstacles are tested FIRST. A pothole's floor is flat, so step_height is ~0 and the
+    // flat-ground branch below would claim it as drivable — which is exactly what the engine did
+    // before this branch existed (measured: a 40 cm pothole came back FREE, traversability 1.00).
+    if      (depth_below > NEG_OBST_DEPTH && c.hit_count >= NEG_MIN_HITS
+             && has_ground_rim(c, ground_z))
+                                  c.obstacle_flag = 3; // Pothole / trench / washout
+    else if (step_height < 0.05f) c.obstacle_flag = 0; // Flat Ground
     else if (clearance > 0.50f)   c.obstacle_flag = 0; // Overhanging tree canopy / wire
     else if (max_above > 0.30f)   c.obstacle_flag = 1; // Lethal Obstacle
     else                          c.obstacle_flag = 2; // Rough terrain / unknown
 }
 
 void compute_traversability(GridCell& c) {
-    if (c.obstacle_flag == 1) {
+    // 3 (negative obstacle) scores 0 exactly like 1 (lethal). A hole and a rock are equally
+    // impassable to a wheeled vehicle, and leaving a pothole on the semantic/roughness path would
+    // hand it back a high score: its floor is flat and smoothly sampled, so roughness is ~0 and
+    // the label is usually GROUND.
+    if (c.obstacle_flag == 1 || c.obstacle_flag == 3) {
         c.traversability = 0.0f;
         return;
     }
@@ -220,8 +256,8 @@ int run_temporal_decay(uint32_t current_frame) {
         if (!c.valid) continue;
         if (current_frame > c.last_update_ts && (current_frame - c.last_update_ts) > (uint32_t)DECAY_WINDOW) {
             c.traversability *= DECAY_FACTOR;
-            if (c.traversability < DECAY_MIN_TRAV && c.obstacle_flag == 1) {
-                c.obstacle_flag = 2; // Demote stale obstacle to unknown
+            if (c.traversability < DECAY_MIN_TRAV && (c.obstacle_flag == 1 || c.obstacle_flag == 3)) {
+                c.obstacle_flag = 2; // Demote stale obstacle (positive or negative) to unknown
             }
             decayed++;
         }

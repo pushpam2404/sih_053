@@ -93,6 +93,63 @@ void test_traversability_and_decay() {
     cout << "  -> PASS" << endl;
 }
 
+// The problem statement names potholes alongside curbs and overhangs. Before classify_obstacle()
+// gained its negative-obstacle branch it measured only UPWARD from ground, so a pothole with a
+// flat floor produced step_height ~ 0 and came back FREE with traversability 1.00 — the planner
+// was told to drive into the hole at full confidence. Both halves are pinned here: the hole must
+// be caught, and a downgrade must NOT be, because "everything below ground_z is a hole" would
+// flag every descending slope as one continuous trench.
+void test_negative_obstacles() {
+    cout << "[TEST] 6. Negative Obstacles (potholes / trenches)..." << endl;
+    const float GZ = -1.2f;   // FAST-LIO's origin is the IMU start pose, so ground is below 0
+
+    // Sampled at 2 cm so each 5 cm cell collects several returns. NEG_MIN_HITS requires
+    // corroboration before calling a cell a hole — h_max of a one-hit cell is just that one
+    // sample, and terrain noise alone would manufacture potholes. On the vehicle the same
+    // threshold is reached either from beam density at close range (~3 cm azimuth spacing at 5 m)
+    // or across consecutive scans, since hit_count accumulates in a persistent cell.
+    reset_map_pool();
+    for (float x = 4.0f; x < 6.0f; x += 0.02f)
+        for (float y = -1.0f; y < 1.0f; y += 0.02f) {
+            bool hole = (x > 4.8f && x < 5.2f && y > -0.2f && y < 0.2f);   // 40 cm pit, 40 cm deep
+            insert_lidar_point(x, y, hole ? GZ - 0.40f : GZ, 0, 0.0f, 0.0f, 1, GZ);
+        }
+    classify_and_score_all_cells(GZ);
+
+    GridCell* pit = query_world(5.0f, 0.0f);
+    assert(pit && "pothole floor must be mapped");
+    assert(pit->obstacle_flag == 3 && "40 cm pothole must classify NEGATIVE, not FREE");
+    assert(pit->traversability == 0.0f && "a hole is as impassable as a rock");
+
+    GridCell* rim = query_world(4.3f, 0.0f);
+    assert(rim && rim->obstacle_flag != 3 && "intact ground beside the hole must stay drivable");
+    cout << "  pothole floor flag=" << (int)pit->obstacle_flag
+         << " trav=" << pit->traversability << ", surrounding ground flag="
+         << (int)rim->obstacle_flag << endl;
+
+    // A uniform downgrade drags the whole neighbourhood below ground_z together, so no cell keeps
+    // a rim at ground level and nothing should be flagged. This is the test that stops the
+    // feature from condemning every hill.
+    for (float grade : {0.02f, 0.04f}) {
+        reset_map_pool();
+        for (float x = 2.0f; x < 20.0f; x += 0.02f)
+            for (float y = -1.0f; y < 1.0f; y += 0.02f)
+                insert_lidar_point(x, y, GZ - grade * (x - 2.0f), 0, 0.0f, 0.0f, 1, GZ);
+        classify_and_score_all_cells(GZ);
+        int neg = 0, tot = 0;
+        for (int i = 0; i < HASH_TABLE_SIZE; i++) {
+            GridCell& c = g_hash_pool[i];
+            if (!c.valid || c.hit_count == 0) continue;
+            tot++;
+            if (c.obstacle_flag == 3) neg++;
+        }
+        cout << "  " << (int)(grade * 100) << "% downgrade: " << neg << " of " << tot
+             << " cells flagged NEGATIVE" << endl;
+        assert(neg == 0 && "a smooth downgrade is not a trench");
+    }
+    cout << "  -> PASS" << endl;
+}
+
 int main() {
     cout << "==========================================================" << endl;
     cout << "   DRDO ID26053 — C++ Grid Engine Consolidated Test Suite " << endl;
@@ -103,6 +160,7 @@ int main() {
     test_welford_height_stats();
     test_raycasting_and_carving();
     test_traversability_and_decay();
+    test_negative_obstacles();
 
     cout << "==========================================================" << endl;
     cout << "   [ALL C++ GRID ENGINE UNIT TESTS PASSED SUCCESSFULLY]   " << endl;
