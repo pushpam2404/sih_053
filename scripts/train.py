@@ -1,3 +1,22 @@
+"""DEPRECATED — superseded by scripts/train_seg.py. Do not use for anything reviewer-facing.
+
+Kept only so the historical 840-parameter checkpoint in models/ stays reproducible. Three
+reasons this script cannot produce a usable model, all of them structural:
+
+  * It trains MinkUNet18Scaffold, a per-point MLP that ignores spatial context entirely. With
+    one point's (x, y, z, intensity) and no neighbourhood there is no semantics to learn —
+    scripts/eval.py measures the resulting checkpoint BELOW a uniform-random baseline.
+  * CLASS_WEIGHTS below is hardcoded with no provenance, and its 8th entry plus the
+    ignore_index=7 in the loss target SKY_NOISE — a class that, since the taxonomy.py rewrite,
+    nothing emits any more (void and sky now map to UNKNOWN, because an unlabelled return still
+    occupies its cell). So the weighting silently ignores an empty class.
+  * It uses random_split on a 10 Hz dataset, so frame N and frame N+1 — the same scene 100 ms
+    apart — land on opposite sides of the train/val line. Any val number it prints is inflated
+    by memorisation.
+
+train_seg.py replaces all three: a real conv network, weights computed from the data into
+configs/class_weights.json, and the official sequence-disjoint pt_*.lst splits.
+"""
 import sys, os, json
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import numpy as np

@@ -41,6 +41,39 @@ def load_model(path: str) -> torch.nn.Module:
         return model
 
 
+def build_predictor(kind: str, checkpoint: str):
+    """Return (predict_fn, emits_fine, description).
+
+    predict_fn maps a (N,4) torch tensor to (N,) ADL-1 predictions, and — when the backend can
+    produce them — a parallel (N,) array of FINE predictions, else None. Keeping this behind one
+    function is the only structural change to this script: everything below it (the confusion
+    matrices, the range bins, the random and majority baselines, the not-better-than-random
+    warning) is the reason any number out of this repo is believable, and stays untouched.
+    """
+    if kind == "legacy":
+        model = load_model(checkpoint)
+
+        def predict(pts):
+            with torch.no_grad():
+                return model(pts).argmax(dim=1).numpy(), None
+
+        return predict, False, f"legacy per-point MLP ({checkpoint})"
+
+    if kind == "range":
+        from drdo_lidar_mapping.inference.range_segmenter import RangeSegmenter
+        seg = RangeSegmenter(checkpoint)
+
+        def predict(pts):
+            # Points are already sensor-frame here: RELLIS .bin files are raw sensor scans, which
+            # is exactly the frame the spherical projection and the network were trained in.
+            adl1, _obj, _conf, fine = seg.segment(pts.numpy(), return_fine=True)
+            return adl1.astype(np.int64), fine.astype(np.int64)
+
+        return predict, True, f"range-image SalsaNext ({checkpoint}, {seg.backend} backend)"
+
+    raise ValueError(f"unknown --model {kind!r}")
+
+
 def iou_table(conf: np.ndarray) -> dict:
     ious = {}
     for c in EVAL_CLASSES:
@@ -64,10 +97,16 @@ def main() -> int:
     ap.add_argument("--data", default=os.path.join(REPO_ROOT, "data/rellis"))
     ap.add_argument("--last-n", type=int, default=20, help="evaluate the last N scans (sorted order)")
     ap.add_argument("--out", default=None, help="optional JSON output path")
+    ap.add_argument("--model", choices=("legacy", "range"), default="legacy",
+                    help="legacy per-point MLP (default) or the trained range-image network")
+    ap.add_argument("--split", default=None,
+                    help="official RELLIS split to evaluate (train|val|test); omit to use --data directly")
     args = ap.parse_args()
 
-    model = load_model(args.checkpoint)
-    ds = RELLISDataset(args.data)
+    predict, emits_fine, model_desc = build_predictor(args.model, args.checkpoint)
+    print(f"[EVAL] model: {model_desc}")
+    ds_kw = {"split": args.split} if args.split else {}
+    ds = RELLISDataset(args.data, **ds_kw)
     indices = range(max(0, len(ds) - args.last_n), len(ds))
     rng = np.random.default_rng(0)
 
@@ -76,11 +115,27 @@ def main() -> int:
     conf_range = np.zeros((len(RANGE_BINS), 8, 8), dtype=np.int64)
     label_counts = np.zeros(8, dtype=np.int64)
     n_points = 0
+
+    # The 12-class fine confusion is what backs the pedestrian-vs-vehicle claim; the 8-class
+    # ADL-1 one above is what the C++ grid engine actually consumes. Both get reported.
+    fine_ds, conf_fine = None, None
+    if emits_fine:
+        from drdo_lidar_mapping.segmentation.dataset import RellisPointDataset
+        from drdo_lidar_mapping.segmentation.taxonomy import FINE_NAMES, NUM_FINE
+        fine_ds = RellisPointDataset(args.data, label_space="fine", **ds_kw)
+        conf_fine = np.zeros((NUM_FINE + 1, NUM_FINE + 1), dtype=np.int64)   # +1 row for IGNORE
+
     with torch.no_grad():
         for idx in indices:
             pts, lbs = ds[idx]
             gt = lbs.numpy()
-            pred = model(pts).argmax(dim=1).numpy()
+            pred, pred_fine = predict(pts)
+            if conf_fine is not None and pred_fine is not None:
+                gt_fine = fine_ds[idx][1].numpy()
+                # IGNORE_INDEX (255) is void/sky: unlabelled returns, excluded from the metric
+                # rather than counted as a class the network got wrong.
+                keep = gt_fine < NUM_FINE
+                np.add.at(conf_fine, (gt_fine[keep], np.minimum(pred_fine[keep], NUM_FINE)), 1)
             rand = rng.integers(0, 7, size=len(gt))
             np.add.at(conf_model, (gt, pred), 1)
             np.add.at(conf_random, (gt, rand), 1)
@@ -114,14 +169,39 @@ def main() -> int:
         miou_b = miou_of(cm) if n else float("nan")
         range_rows.append({"range_m": [lo, hi], "points": n, "accuracy": acc_b, "mIoU": miou_b})
         print(f"  {lo:5.0f}-{hi:<5.0f} m  points={n:8d}  accuracy={acc_b*100:6.2f}%  mIoU={miou_b*100:6.2f}%")
+    fine_rows, fine_miou = None, None
+    if conf_fine is not None:
+        n_fine = conf_fine[:NUM_FINE, :NUM_FINE]
+        fine_ious = {}
+        for c in range(NUM_FINE):
+            tp = n_fine[c, c]
+            denom = n_fine[:, c].sum() + n_fine[c, :].sum() - tp
+            fine_ious[FINE_NAMES[c]] = float(tp / denom) if denom > 0 else float("nan")
+        present = [c for c in range(NUM_FINE) if n_fine[c, :].sum() > 0]
+        fine_miou = float(np.nanmean([fine_ious[FINE_NAMES[c]] for c in present])) if present else float("nan")
+        print(f"\n--- Fine {NUM_FINE}-class IoU (what the network predicts; PERSON and VEHICLE "
+              f"are the pedestrian/vehicle claim) ---")
+        for c in range(NUM_FINE):
+            seen = int(n_fine[c, :].sum())
+            note = "" if seen else "   (absent in these scans)"
+            print(f"  {c:2d} {FINE_NAMES[c]:<17} IoU={fine_ious[FINE_NAMES[c]]*100:6.2f}%  "
+                  f"points={seen:8d}{note}")
+        print(f"[EVAL] fine mIoU (present classes only): {fine_miou*100:.2f}%")
+        print("[EVAL] note: fine mIoU is expected to sit BELOW the ADL-1 mIoU — it scores 12 "
+              "classes including rare ones. Published RELLIS-3D LiDAR baselines: SalsaNext 43.07%, "
+              "KPConv 19.07%.")
+        fine_rows = fine_ious
+
     if miou <= rand_miou + 0.02:
         print("[EVAL] WARNING: model is not meaningfully better than random guessing.")
 
     if args.out:
         with open(args.out, "w") as f:
-            json.dump({"checkpoint": args.checkpoint, "scans": len(indices), "points": n_points,
+            json.dump({"checkpoint": args.checkpoint, "model": args.model, "scans": len(indices),
+                       "points": n_points,
                        "per_class_iou": ious, "mIoU": miou, "random_baseline_mIoU": rand_miou,
-                       "accuracy": acc, "majority_class_accuracy": maj_acc, "by_range": range_rows}, f, indent=2)
+                       "accuracy": acc, "majority_class_accuracy": maj_acc, "by_range": range_rows,
+                       "fine_per_class_iou": fine_rows, "fine_mIoU": fine_miou}, f, indent=2)
         print(f"[EVAL] Results written to {args.out}")
     return 0
 

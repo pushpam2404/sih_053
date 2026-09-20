@@ -12,11 +12,12 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    description="Moving-object detection for the DRDO ID26053 foveated 2.5D map",
+    description="Moving-object detection and semantic segmentation for the DRDO ID26053 foveated 2.5D map",
     license="Apache-2.0",
     entry_points={
         "console_scripts": [
             "dynamic_obstacle_node = drdo_perception.dynamic_obstacle_node:main",
+            "segmentation_node = drdo_perception.segmentation_node:main",
         ],
     },
 )
