@@ -112,7 +112,18 @@ python3 tests/python/test_deployment.py
 
 # 3. Test C++ / Pybind11 Map Bridge
 python3 tests/python/test_map_bridge.py
+
+# 4. Range-image projection, kNN label transfer, and the FINE -> ADL-1 collapse safety property
+python3 tests/python/test_segmentation.py
+
+# 5. Geometric object classification (pedestrian / vehicle / pole / wall)
+python3 tests/python/test_classify.py
 ```
+
+On the development Mac use `.venv/bin/python` in place of `python3` and create the
+environment with `--system-site-packages`; see `CLAUDE.md`, which records why (the
+system `python3` is 3.14 and cannot load the CPython 3.11 extension module, and the
+uv interpreter is externally managed so `pip install` into it fails with PEP 668).
 
 Expected output:
 ```
@@ -149,8 +160,15 @@ rviz2 -d rviz/drdo_map.rviz
 ```
 The layout shows the `/map` costmap, the `/drdo/map_image` colour view (terrain: green flat, amber rough, red lethal, teal overhang) and `/drdo/dynamic_obstacles` moving-object markers.
 
-### Offline dashboard (no ROS)
+### Offline dashboard and performance evidence (no ROS)
 ```bash
 python3 scripts/map_dashboard.py                  # -> reports/map_dashboard.html
+python3 scripts/map_dashboard.py --no-occlusion   # comparison against the idealised scene
+python3 scripts/map_dashboard.py --speed 11.1     # 40 km/h
+
+python3 scripts/benchmark.py --frames 200         # staged latency -> reports/benchmark.json
+python3 scripts/eval.py                           # segmentation IoU vs random/majority baselines
+python3 scripts/kitti_replay.py --use-gt-labels   # proves labels reach the C++ engine
 ```
-Needs the compiled `lib/drdo_map*.so` pybind11 module.
+All of these need the compiled `lib/drdo_map*.so` pybind11 module.
+Measured results and methodology: [`PERFORMANCE.md`](PERFORMANCE.md).
