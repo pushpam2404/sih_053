@@ -3,6 +3,7 @@ Provides DBSCAN clustering for obstacle extraction and SORT 3D Kalman Filter
 multi-object tracking with Hungarian data association.
 """
 
+from .classify import ClassifierThresholds, classify_box, classify_extent
 from .cluster import (
     BoundingBox3D,
     cluster_hard_obstacles,
@@ -24,4 +25,7 @@ __all__ = [
     "CLASS_OBSTACLE_SOFT",
     "CLASS_OBSTACLE_HARD",
     "CLASS_UNKNOWN",
+    "classify_extent",
+    "classify_box",
+    "ClassifierThresholds",
 ]

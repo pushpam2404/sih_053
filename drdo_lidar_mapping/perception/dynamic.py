@@ -29,6 +29,9 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 
+from ..segmentation.taxonomy import OBJ_NONE
+from .classify import classify_extent
+
 try:
     from scipy import ndimage
     from scipy.optimize import linear_sum_assignment
@@ -50,6 +53,11 @@ class MovingObject:
     z_max: float
     num_points: int
     age_frames: int
+    # Geometric classification (drdo_lidar_mapping/perception/classify.py) so a confirmed mover
+    # is named ("person", "vehicle") and coloured instead of a uniform magenta box. Defaulted so
+    # any existing direct construction of MovingObject (tests, older callers) keeps working.
+    obj_class: int = OBJ_NONE
+    obj_conf: float = 0.0
 
     @property
     def speed(self) -> float:
@@ -246,9 +254,11 @@ class DynamicObstacleDetector:
             if t.confirmed:
                 moving_mask[d[4]] = True
                 z = xyz[d[4], 2]
+                z_min, z_max = float(z.min()), float(z.max())
+                obj_class, obj_conf = classify_extent(float(d[2]), float(d[3]), z_max - z_min)
                 result.append(MovingObject(tid, float(d[0]), float(d[1]), float(t.vx), float(t.vy),
-                                           float(d[2]), float(d[3]), float(z.min()), float(z.max()),
-                                           int(len(d[4])), t.age))
+                                           float(d[2]), float(d[3]), z_min, z_max,
+                                           int(len(d[4])), t.age, obj_class, obj_conf))
 
         for tid in ids:
             if tid in used_t:

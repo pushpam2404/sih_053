@@ -32,6 +32,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 try:
     from drdo_lidar_mapping.perception.dynamic import DynamicObstacleDetector, cloud_xyz, filter_cloud_bytes
+    from drdo_lidar_mapping.segmentation.taxonomy import OBJ_NAMES, OBJ_NONE, OBJ_RGB
 except ImportError as exc:  # pragma: no cover - deployment error path
     raise ImportError("drdo_lidar_mapping is not importable: run `pip install -e .` in the repository root") from exc
 
@@ -126,6 +127,12 @@ class DynamicObstacleNode(Node):
         arr.markers.append(clear)
         for ob in movers:
             height = max(ob.z_max - ob.z_min, 0.3)
+            # Colour and name come from the geometric classifier (perception/classify.py) via
+            # taxonomy.OBJ_RGB / OBJ_NAMES — the one shared object vocabulary, so a walking person
+            # and a moving truck are no longer both drawn as the same magenta box.
+            cls = getattr(ob, "obj_class", OBJ_NONE)
+            r, g, b = OBJ_RGB.get(cls, OBJ_RGB[OBJ_NONE])
+            r, g, b = r / 255.0, g / 255.0, b / 255.0
             box = Marker()
             box.header.frame_id, box.header.stamp = self.world_frame, stamp
             box.ns, box.id, box.type, box.action = "moving_box", ob.track_id, Marker.CUBE, Marker.ADD
@@ -133,7 +140,7 @@ class DynamicObstacleNode(Node):
             box.pose.position.z = ob.z_min + height / 2.0
             box.pose.orientation.w = 1.0
             box.scale.x, box.scale.y, box.scale.z = max(ob.length, 0.3), max(ob.width, 0.3), height
-            box.color.r, box.color.g, box.color.b, box.color.a = 1.0, 0.1, 0.8, 0.6
+            box.color.r, box.color.g, box.color.b, box.color.a = r, g, b, 0.6
             arrow = Marker()
             arrow.header = box.header
             arrow.ns, arrow.id, arrow.type, arrow.action = "moving_velocity", ob.track_id, Marker.ARROW, Marker.ADD
@@ -141,7 +148,7 @@ class DynamicObstacleNode(Node):
             arrow.points = [Point(x=ob.x, y=ob.y, z=ob.z_max + 0.2),
                             Point(x=ob.x + ob.vx, y=ob.y + ob.vy, z=ob.z_max + 0.2)]   # 1 s ahead
             arrow.scale.x, arrow.scale.y, arrow.scale.z = 0.15, 0.3, 0.3
-            arrow.color.r, arrow.color.g, arrow.color.b, arrow.color.a = 1.0, 0.1, 0.8, 1.0
+            arrow.color.r, arrow.color.g, arrow.color.b, arrow.color.a = r, g, b, 1.0
             text = Marker()
             text.header = box.header
             text.ns, text.id, text.type, text.action = "moving_label", ob.track_id, Marker.TEXT_VIEW_FACING, Marker.ADD
@@ -149,7 +156,7 @@ class DynamicObstacleNode(Node):
             text.pose.orientation.w = 1.0
             text.scale.z = 0.6
             text.color.r = text.color.g = text.color.b = text.color.a = 1.0
-            text.text = f"#{ob.track_id} {ob.speed:.1f} m/s"
+            text.text = f"#{ob.track_id} {OBJ_NAMES[cls]} {ob.speed:.1f} m/s"
             arr.markers.extend([box, arrow, text])
         self.marker_pub.publish(arr)
 

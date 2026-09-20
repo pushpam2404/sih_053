@@ -8,6 +8,9 @@ import numpy as np
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 
+from ..segmentation.taxonomy import OBJ_NONE
+from .classify import classify_box
+
 try:
     from sklearn.cluster import DBSCAN
     SKLEARN_AVAILABLE = True
@@ -32,6 +35,11 @@ class BoundingBox3D:
     max_bound: np.ndarray     # [max_x, max_y, max_z]
     extent: np.ndarray        # [dx, dy, dz]
     num_points: int
+    # Geometric classification (perception/classify.py) — this is what makes cluster.py the
+    # static-obstacle classifier (walls, poles) the problem statement asks for, rather than an
+    # unnamed box. Defaulted so existing callers that construct BoundingBox3D directly still work.
+    obj_class: int = OBJ_NONE
+    obj_conf: float = 0.0
 
     @property
     def bbox_2d(self) -> np.ndarray:
@@ -124,6 +132,7 @@ def cluster_hard_obstacles(points: np.ndarray,
         extent = max_bound - min_bound
         # Prevent 0 dimension
         extent = np.maximum(extent, 0.1)
+        obj_class, obj_conf = classify_box(min_bound, max_bound)
 
         bboxes.append(BoundingBox3D(
             cluster_id=int(cid),
@@ -131,7 +140,9 @@ def cluster_hard_obstacles(points: np.ndarray,
             min_bound=min_bound.astype(np.float32),
             max_bound=max_bound.astype(np.float32),
             extent=extent.astype(np.float32),
-            num_points=len(c_pts)
+            num_points=len(c_pts),
+            obj_class=obj_class,
+            obj_conf=obj_conf,
         ))
 
     return bboxes
