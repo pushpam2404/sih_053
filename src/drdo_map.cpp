@@ -218,8 +218,11 @@ void reset_map_pool() {
 // Returns the updated slot, or -1 if the point was discarded or the pool is full.
 int insert_lidar_point_slot(float x, float y, float z, int label, float rx, float ry, uint32_t ts, float ground_z) {
     if (label < 0 || label > 7) label = 6;
+    float range = sqrtf((x - rx) * (x - rx) + (y - ry) * (y - ry));
     float zr = z - ground_z;
-    if (label == 7 || !(zr <= Z_REL_MAX && zr >= Z_REL_MIN)) return -1;  // sky/dust, outliers, NaN
+    // Lower bound widens with range (slope_adjusted_z_min) so a physically plausible downgrade
+    // ahead of the vehicle isn't discarded — see its comment in drdo_map.h.
+    if (label == 7 || zr > Z_REL_MAX || zr < slope_adjusted_z_min(range)) return -1;  // sky/dust, outliers, NaN
     ResolvedCell rc = resolve_resolution(x, y, rx, ry);
     if (rc.discard) return -1;
 

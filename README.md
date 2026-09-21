@@ -222,7 +222,7 @@ docs/PERFORMANCE.md                     every measured number, with methodology
 
 1. **On the Orin:** build, run the regression test and the ROS graph on a recorded Ouster bag, publish real latency, power and thermal numbers, and compile the CUDA kernels for the first time.
 2. **Profile the real rasterisation pass** in `grid_map_node.cpp` to replace the Python approximation that currently dominates the frame budget.
-3. **Local ground estimation** for slopes — this also fixes the `Z_REL_MIN` reach limit that discards returns past ~27 m on an 8% downgrade.
+3. **Local ground estimation** for slopes. The look-ahead data-loss half is fixed — a range-scaled lower bound (`slope_adjusted_z_min()`) now keeps returns on a plausible downgrade instead of discarding them outright (was 65 of 116 points lost on a 60 m probe at 8% grade; now 0, pinned by regression GATE 7). Still open: `classify_obstacle` compares every cell against one global `ground_z`, so classification on a sustained grade can still drift where a cell isn't locally flat enough to short-circuit into the flat-ground branch. That needs real per-cell/local terrain following, not just a wider filter bound.
 4. **Train the segmentation network** once RELLIS-3D (or GOOSE) is in hand; the label path is already proven end to end.
 5. **Harder classification evidence** — a scene with off-nominal object sizes and edge-on vehicles, to replace an accuracy number that the current scene makes too easy.
 

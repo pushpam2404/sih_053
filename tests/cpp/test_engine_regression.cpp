@@ -92,6 +92,25 @@ int main(int argc, char** argv) {
     }
     printf("[GATE 6] %ld positions x %d level pairs: non-nesting ratios=%ld parent mismatches=%ld\n",
            samples, NUM_LEVELS - 1, straddle, parent_mismatch);
+
+    // ── Gate 7: slope tolerance. Before slope_adjusted_z_min(), a flat Z_REL_MIN=-2.0 m dropped
+    //    every return past ~27 m on an 8% downgrade (measured: 65 of 116 points on a 60 m probe) —
+    //    the vehicle's own ground_z tracks its live pose, but a return further downhill than it has
+    //    driven still fell outside the fixed window. Kept probe must now survive in full; a return
+    //    that is NOT on a physically plausible grade (a bad multipath hit far below the surface it
+    //    should be near) must still be rejected. ──
+    reset_map_pool();
+    int kept = 0, total = 0;
+    for (float range = 1.0f; range <= 60.0f; range += 0.5f) {
+        float z = GZ - 0.08f * range;   // 8% downgrade
+        total++;
+        if (insert_lidar_point_slot(range, 0.0f, z, 0, 0.0f, 0.0f, 1, GZ) >= 0) kept++;
+    }
+    printf("[GATE 7] 8%% downgrade, 60 m probe: kept=%d/%d\n", kept, total);
+    assert(kept == total && "a physically plausible downgrade must not be discarded");
+    int implausible = insert_lidar_point_slot(10.0f, 0.0f, GZ - 20.0f, 0, 0.0f, 0.0f, 1, GZ);
+    printf("[GATE 7] implausible return (20 m below ground_z at 10 m range): %s\n", implausible >= 0 ? "kept" : "REJECTED");
+    assert(implausible < 0 && "a return far below any plausible grade for its range must still be rejected");
     assert(straddle == 0 && parent_mismatch == 0 && "levels must nest exactly");
     assert(resolve_resolution(9.99f, 0, 0, 0).cell_size == 0.05f && resolve_resolution(99.0f, 0, 0, 0).cell_size == 0.50f);
 

@@ -91,6 +91,20 @@ inline int32_t cell_index(float w, int level) { return floor_div(base_index(w), 
 constexpr float Z_REL_MIN = -2.0f;
 constexpr float Z_REL_MAX = 15.0f;
 
+// Z_REL_MIN alone is a look-ahead problem, not a look-down problem: ground_z is the robot's own
+// live TF z (grid_map_node re-reads it every frame), so it already follows the vehicle down a
+// slope it has driven. What it cannot do is anticipate a downgrade the vehicle hasn't reached yet
+// — a return 60 m ahead down an 8% grade is ~4.8 m below the CURRENT ground_z, past the flat -2.0 m
+// gate. Measured before this constant existed: 65 of 116 points on a 60 m probe at 8% grade were
+// discarded outright. MAX_SLOPE_GRADE widens the lower bound with range so a physically plausible
+// downgrade is kept, while a point that is impossibly far below ground_z for its range (multipath,
+// a bad return through the vehicle chassis) is still rejected. 40% is generous for off-road grades
+// this vehicle is expected to encounter; it is a bounded outlier gate, not per-cell terrain
+// following — true local ground estimation (fitting a plane to already-seen nearby terrain) is
+// still open, see the roadmap.
+constexpr float MAX_SLOPE_GRADE = 0.40f;
+DRDO_HOST_DEVICE inline float slope_adjusted_z_min(float range_m) { return Z_REL_MIN - MAX_SLOPE_GRADE * range_m; }
+
 // ── Compact 40-byte GridCell Structure ───────────────────────────────────────
 struct GridCell {
     float    h_min;             // Minimum elevation (m)

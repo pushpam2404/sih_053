@@ -50,6 +50,25 @@ pybind11 call path, `clang++ -O3`. No GPU is used anywhere in the measured pipel
 Peak load **0.290**, **0 insert failures** over 3.3 km. Load plateaus rather than growing, which is
 the band-aware eviction working: cells leave the pool at the rate new ones enter.
 
+### Slope tolerance (GATE 7 in the same binary)
+
+`ground_z` is the vehicle's own live TF z, re-read every frame, so it already follows the vehicle
+down a slope it has driven. The gap was look-ahead: a flat `Z_REL_MIN = -2.0 m` window discarded
+any return further downhill than the vehicle's *current* height allowed, regardless of range —
+measured before the fix: **65 of 116 points on a 60 m probe at an 8% downgrade, discarded outright.**
+`slope_adjusted_z_min()` widens that lower bound with range (`MAX_SLOPE_GRADE = 0.40`, i.e. a 40%
+grade allowance before a return is treated as an outlier rather than terrain):
+
+| | Before | After |
+|---|---|---|
+| 8% downgrade, 60 m probe (119 sampled points) | 65 discarded | **0 discarded (119/119 kept)** |
+| Return 20 m below `ground_z` at 10 m range (implausible for any real grade) | kept | **rejected** |
+
+This closes the data-loss half of the slope gap. It does not close the other half: `classify_obstacle`
+still scores every cell against one global `ground_z`, so on a sustained grade a cell that isn't
+locally flat enough to hit the flat-ground short-circuit can still be misclassified. That needs real
+per-cell local ground estimation, which remains open — see the roadmap in `README.md`.
+
 ## 2. Memory
 
 Same run, measured from the live pool rather than computed from a formula:

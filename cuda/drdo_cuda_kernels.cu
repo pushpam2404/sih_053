@@ -93,11 +93,14 @@ __global__ void update_height_kernel(
 
     float wx = pts_x[idx], wy = pts_y[idx], wz = pts_z[idx];
     uint8_t label = labels[idx] > 7 ? 6 : labels[idx];
-    float zr = wz - ground_z;
-    if (label == 7 || !(zr <= Z_REL_MAX && zr >= Z_REL_MIN)) return;
 
     float dx = wx - robot_x, dy = wy - robot_y;
     float dist = sqrtf(dx * dx + dy * dy);
+
+    // Mirrors insert_lidar_point_slot() in src/drdo_map.cpp: the lower bound widens with range
+    // (slope_adjusted_z_min, drdo_map.h) so a plausible downgrade ahead of the vehicle is kept.
+    float zr = wz - ground_z;
+    if (label == 7 || zr > Z_REL_MAX || zr < slope_adjusted_z_min(dist)) return;
     if (!(dist <= 100.0f)) return;
 
     // Mirrors resolve_resolution(): 5 cm <= 10 m, 10 cm <= 25 m, 50 cm <= 100 m, indices derived from
