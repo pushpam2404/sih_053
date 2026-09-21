@@ -31,7 +31,7 @@ PY=.venv/bin/python
 # C++ engine tests (no cmake on this host)
 clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_grid_engine.cpp -o /tmp/test_grid_engine && /tmp/test_grid_engine
 clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_engine_regression.cpp -o /tmp/test_engine_regression
-/tmp/test_engine_regression 11.1 300    # gates 1-6 + short drive; no args = full 3000-frame drive (~1.5 min)
+/tmp/test_engine_regression 11.1 300    # gates 1-7 + short drive; no args = full 3000-frame drive (~1.5 min)
 
 # pybind11 module -> lib/ (where the tests and dashboard import it from)
 clang++ -O3 -std=c++17 -shared -fPIC -undefined dynamic_lookup $($PY -m pybind11 --includes) -Iinclude \
