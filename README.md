@@ -50,7 +50,7 @@ A 3D LiDAR produces over a million points a second. Keeping them all as a 3D map
 | Existing approach | What it does well | Gap for this problem | Our answer |
 |---|---|---|---|
 | **elevation_mapping / _cupy** (ETH) | Accurate robot-centric elevation maps, GPU version | One resolution over a fixed window: 5 cm to 100 m needs a 4000 × 4000 grid | Three nested resolutions in one pool; 18.3 MB live |
-| **OctoMap / nvblox** | Full 3D occupancy / TSDF | Uniform voxels; 5 cm over 100 m is ~3.8 GB at 1 byte/voxel | 2.5D cells carry the height a ground vehicle needs, at **210× less memory** (measured) |
+| **OctoMap / nvblox** | Full 3D occupancy / TSDF | Uniform voxels; 5 cm over 100 m is ~3.8 GB at 1 byte/voxel | 2.5D cells carry the height a ground vehicle needs, at a fraction of the memory (see §4 — the fair number is closer to a uniform 20 cm map's footprint, not the 210× figure against a different data structure) |
 | **Nav2 voxel / STVL layers** | Obstacle marking with time decay | No elevation, roughness or overhang reasoning; no negative obstacles | Per-cell height statistics → traversability cost, including potholes |
 | **Offline dynamic-point removal** (Removert, ERASOR) | Clean maps after the drive | Not real-time | Online, per scan, geometry-only |
 | **Plain cluster + speed tracking** (DBSCAN + SORT) | Simple | Reports parked cars, trees and walls as moving when the viewing angle changes — **69 of 337** "moving" reports were static in our scene | Whole-footprint shift + vacated-space test: **0 of 286**, with occlusion modelled |
@@ -80,8 +80,16 @@ Apple M4, single CPU thread, synthetic OS1-64 scans. Full methodology in [`docs/
 | Representation | Memory | Ratio |
 |---|---|---|
 | **This engine, in use** | **18.3 MB** | — |
+| Uniform 20 cm 2.5D grid, r = 100 m *(scaled from the row below)* | ≈ 30 MB | 1.6× |
+| Uniform 10 cm 2.5D grid, r = 100 m *(scaled from the row below)* | ≈ 120 MB | 6.5× |
 | Uniform 5 cm 2.5D grid, r = 100 m | 479 MB | 26× |
 | Uniform 5 cm 3D voxels, r = 100 m | 3,835 MB | **210×** |
+
+The honest headline is the 20 cm row, not the 210×: this engine's live footprint is close to what a
+uniform 20 cm 2.5D map would cost, while resolving 5 cm out to 10 m and 10 cm out to 25 m. The 210×
+figure is real but compares against a different data structure (a full 3D occupancy grid at 1
+byte/voxel), not a finer resolution of the same one — see `docs/PERFORMANCE.md` for the full
+breakdown and why that comparison is deliberately generous to the baseline.
 
 ### Moving objects, with occlusion modelled
 
@@ -94,6 +102,8 @@ Apple M4, single CPU thread, synthetic OS1-64 scans. Full methodology in [`docs/
 | Time to confirm | 0.9–2.8 s | 0.8–2.4 s |
 
 Occlusion costs real recall — 89% → 67% at 25–40 m versus the older idealised scene — and the 74% at 0–10 m / 40 km/h reflects an object crossing the near band faster than the ~1 s confirmation window. Both are honest limits of a confirm-then-report design, reported rather than tuned away.
+
+**"Time to confirm" is not a blind spot.** An unconfirmed candidate is never excluded from the map: `perception/dynamic.py` only flags a point for removal once its track is `confirmed`, so until then it is published on `/drdo/cloud_static` and inserted like any other return — the engine's `classify_obstacle()` scores it purely from height statistics, with no dependency on the mover detector. The confirmation delay only affects the "moving" label; a candidate object is a normal, potentially lethal obstacle in the costmap from its first return.
 
 ### Negative obstacles
 

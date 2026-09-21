@@ -58,11 +58,19 @@ Same run, measured from the live pool rather than computed from a formula:
 |---|---|---|
 | **This engine (foveated 2.5D), in use** | **18.3 MB** (479,271 cells × 40 B) | — |
 | Fixed preallocated pool | 80.0 MB | ceiling, not usage |
+| Uniform 20 cm 2.5D grid, r = 100 m *(scaled)* | ≈ 30 MB | **1.6× larger** |
+| Uniform 10 cm 2.5D grid, r = 100 m *(scaled)* | ≈ 120 MB | **6.5× larger** |
 | Uniform 5 cm 2.5D grid, r = 100 m | 479 MB | **26× larger** |
 | Uniform 5 cm 3D voxel grid, r = 100 m, 16 m tall, 1 B/voxel | 3,835 MB | **210× larger** |
 
-The 3D comparison is deliberately generous to the baseline: 1 byte per voxel is smaller than any
-real occupancy implementation, and a 16 m column is shallow for a 100 m radius.
+The two "scaled" rows are not separately measured: cell count in a uniform 2.5D grid scales as
+1/resolution², so they are the measured 5 cm row (479 MB) divided by 4 and by 16. They are the
+fairer comparison than either extreme in this table. **The honest headline is this: our live
+footprint is close to what a uniform 20 cm 2.5D map would cost, while we resolve 5 cm out to 10 m
+and 10 cm out to 25 m.** The 210× figure against a full 3D voxel grid is real but is comparing
+different data structures, not different resolutions of the same one — and it is deliberately
+generous to that baseline besides: 1 byte per voxel is smaller than any real occupancy
+implementation, and a 16 m column is shallow for a 100 m radius.
 
 ## 3. Full per-frame pipeline
 
@@ -137,6 +145,15 @@ Static objects reported moving: **0 / 129** object-frames. Time to confirm: 0.8 
 partly hidden object is genuinely harder to track. The 0–10 m recall at 40 km/h (74%) is lower than
 at 18 km/h because an object crosses the near band in under a second while confirmation needs ~1 s
 of consistent evidence — a real limitation of the confirm-then-report design, not noise.
+
+**What "0.8–2.4 s to confirm" does *not* mean.** It is not a window during which a mover is invisible
+to the map or the planner. `perception/dynamic.py` only sets a point's `moving_mask` once its track
+is `confirmed` (streak ≥ `confirm_frames`); until then the point is published on `/drdo/cloud_static`
+like any other return, and the C++ engine's `classify_obstacle()` scores every inserted point purely
+from height statistics — it has no dependency on the mover detector at all. So a not-yet-confirmed
+candidate is a normal, potentially lethal obstacle in the map and costmap from its first return. The
+only thing confirmation gates is when the filter starts *excluding* a point that has actually left —
+i.e. the delay costs recall on the "moving" label, never obstacle avoidance.
 
 The **0 false positives** figure is the one the design exists to protect. A plain speed threshold
 (DBSCAN + SORT) reported **69 of 337** "moving" objects as moving when they were static — parked
