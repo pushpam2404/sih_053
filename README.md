@@ -130,8 +130,6 @@ The `models/*` files are placeholders. `scripts/eval.py` measures them at **5.01
 
 ## 6. Data flow
 
-Full architecture diagram, including the offline segmentation-training path and host dev tooling: [`docs/architecture.d2`](docs/architecture.d2) / [`docs/architecture.svg`](docs/architecture.svg) (render with `d2 docs/architecture.d2 docs/architecture.svg`). The ASCII sketch below is the critical path only.
-
 ```
 Ouster OS1-64 ──► FAST-LIO2 ──► /cloud_registered
                                       │
