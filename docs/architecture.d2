@@ -1,0 +1,95 @@
+# DRDO ID26053 — system architecture
+# Render: d2 docs/architecture.d2 docs/architecture.svg
+direction: down
+
+classes: {
+  optin: {
+    style.stroke-dash: 4
+    style.opacity: 0.8
+  }
+  offline: {
+    style.stroke-dash: 2
+    style.opacity: 0.6
+  }
+}
+
+sensors: "Ouster OS1-64 + IMU" {
+  style.fill: "#e8f0fe"
+}
+
+lio: "FAST-LIO2\nstate estimation"
+
+perception: "Perception" {
+  dynamic: "dynamic_obstacle_node\nperception/dynamic.py" {
+    tooltip: |md
+      MOVING only after a confirm_frames streak:
+      whole-footprint shift AND vacated cells empty.
+      A speed threshold alone false-positives parked
+      cars & walls as viewing angle changes.
+    |
+  }
+  seg: "segmentation_node\nopt-in: enable_semantics:=true" {
+    class: optin
+  }
+  dynamic -> seg: "cloud_static\n(scan minus confirmed movers)" {
+    class: optin
+  }
+}
+
+engine: "grid_map_node — C++ engine" {
+  hash: "spatial hash pool\n2^21 slots x 40B (80MB ceiling)"
+  fov: "3 nested foveation levels\n5cm<=10m · 10cm<=25m · 50cm<=100m\ninteger floor-div: exact nesting"
+  classify: "classify_obstacle()\nFREE / OBSTACLE / UNKNOWN /\nNEGATIVE (pothole, rim-tested)"
+  decay: "decay + purge_distant_cells()\nbounds memory over distance"
+
+  hash -> fov: "insert + raycast_band()\nfree-space carve"
+  fov -> classify
+  classify -> decay
+}
+
+costmap: "/map\nOccupancyGrid, transient_local"
+mapimage: "/drdo/map_image\nterrain / elevation view"
+nav2: "Nav2\nSmacPlannerHybrid + MPPI"
+cmdvel: "/cmd_vel"
+
+sensors -> lio: "/ouster/points\n/ouster/imu"
+lio -> perception.dynamic: "/cloud_registered\n(world frame)"
+perception.dynamic -> engine.hash: "/drdo/cloud_static\n(enable_semantics:=false)"
+perception.seg -> engine.hash: "/drdo/cloud_labeled\n(ADL-1 label/pt)" {
+  class: optin
+}
+engine.decay -> costmap
+engine.decay -> mapimage
+costmap -> nav2: "StaticLayer"
+nav2 -> cmdvel
+
+# ── Side annotations: offline / dev-only, kept out of the main critical path ──
+
+taxonomy: "segmentation/taxonomy.py\nRAW -> FINE(12) -> ADL-1(8)\ncollapse_probs(): softmax->sum->argmax" {
+  class: offline
+}
+taxonomy -> perception.seg: "shared vocabulary" {
+  class: offline
+}
+
+offline_pipeline: "Segmentation training (offline — not run on Jetson)" {
+  class: offline
+  rellis: "RELLIS-3D\n(real data, not yet downloaded)" { class: offline }
+  cache: "build_range_cache.py\n256KB/scan" { class: offline }
+  train: "train_seg.py\nLovász + weighted CE" { class: offline }
+  onnx: "export_seg_onnx.py\n.onnx + meta.json sidecar" { class: offline }
+  rellis -> cache -> train -> onnx: { class: offline }
+}
+offline_pipeline.onnx -> perception.seg: "range_segmenter\n(strict, no fallback)" {
+  class: offline
+}
+
+devtools: "Host dev tooling (no ROS/CUDA)" {
+  class: offline
+  pybind: "drdo_map_py.cpp\npybind11 bridge" { class: offline }
+  dash: "map_dashboard.py\neval.py · benchmark.py" { class: offline }
+  pybind -> dash: { class: offline }
+}
+engine.hash -> devtools.pybind: "same engine\nno ROS needed" {
+  class: offline
+}
