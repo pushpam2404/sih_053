@@ -4,7 +4,7 @@
   <name>drdo_bringup</name>
   <version>0.6.0</version>
   <description>DRDO ID26053: Top-level bringup, launch, and configuration package for off-road autonomous mapping and navigation.</description>
-  <maintainer email="autonomous-systems@drdo.gov.in">DRDO Autonomous Navigation Team</maintainer>
+  <maintainer email="prsatyarthi2404@gmail.com">Pushpam Raj Satyarthi</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

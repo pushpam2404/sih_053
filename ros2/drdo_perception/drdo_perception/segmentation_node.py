@@ -37,7 +37,7 @@ So the order is mandatory and is enforced below:
 The transformed copy is inference input only and is never published.
 
 ── Status ───────────────────────────────────────────────────────────────────────────────────
-NOT EXECUTED. ROS 2 is not installed on the macOS development host (see CLAUDE.md), so this
+NOT EXECUTED. ROS 2 is not installed on the macOS development host (see docs/DEVELOPMENT.md), so this
 file has been byte-compiled and reviewed only — it has never been spun, and no `ros2 topic echo`
 has ever confirmed the field layout below on a live graph. The parts that *can* run on the host
 are covered elsewhere: RangeSegmenter by tests/python/test_segmentation.py, and the

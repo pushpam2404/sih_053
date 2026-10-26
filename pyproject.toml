@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "Apache-2.0"}
 authors = [
-    {name = "DRDO ID26053 Autonomous Navigation Team", email = "autonomous-systems@drdo.gov.in"}
+    {name = "Pushpam Raj Satyarthi", email = "prsatyarthi2404@gmail.com"}
 ]
 keywords = [
     "lidar", "mapping", "robotics", "ros2", "autonomous-vehicles",

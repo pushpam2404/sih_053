@@ -3,7 +3,7 @@
   <name>drdo_perception</name>
   <version>0.1.0</version>
   <description>DRDO ID26053 — moving-object detection that keeps movers out of the static 2.5D map</description>
-  <maintainer email="drdo@sih2026.in">SIH Team</maintainer>
+  <maintainer email="prsatyarthi2404@gmail.com">Pushpam Raj Satyarthi</maintainer>
   <license>Apache-2.0</license>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>

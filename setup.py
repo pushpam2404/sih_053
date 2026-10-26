@@ -5,7 +5,7 @@ setup(
     name="drdo_lidar_mapping",
     version="0.7.0",
     description="Adaptive 2.5D Elevation & Semantic Mapping for Off-Road Autonomous Vehicles",
-    author="DRDO ID26053 Autonomous Systems Team",
+    author="Pushpam Raj Satyarthi",
     packages=find_packages(),
     python_requires=">=3.8",
     install_requires=[
@@ -24,7 +24,7 @@ setup(
     # scripts/ has no __init__.py and is not picked up by find_packages(), so `pip install -e .`
     # installed four commands that raised ModuleNotFoundError on invocation. Two of the target
     # functions (run_e2e_benchmark, export_onnx.main) no longer exist either.
-    # The scripts are run directly and are documented that way in README and CLAUDE.md:
+    # The scripts are run directly and are documented that way in README and docs/DEVELOPMENT.md:
     #     .venv/bin/python scripts/benchmark.py --frames 200
     # Re-add entry points only alongside packaging scripts/ properly.
 )

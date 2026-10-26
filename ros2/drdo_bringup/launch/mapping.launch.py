@@ -15,7 +15,7 @@ Data flow (default): /cloud_registered -> dynamic_obstacle_node -> /drdo/cloud_s
 With enable_semantics:=true a stage is inserted:  ... -> segmentation_node -> /drdo/cloud_labeled -> grid_map_node
 
 enable_semantics defaults to FALSE on purpose. No trained range-segmentation checkpoint exists in
-this repo yet (models/* are placeholders that score at chance — see CLAUDE.md), so the default
+this repo yet (models/* are placeholders that score at chance — see docs/DEVELOPMENT.md), so the default
 launch is byte-for-byte the pipeline that works today: zero behaviour change until weights ship.
 
 TF tree:  map -> camera_init (FAST-LIO world) -> body (FAST-LIO IMU, dynamic) -> base_link -> os_sensor
