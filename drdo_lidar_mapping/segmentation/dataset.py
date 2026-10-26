@@ -47,7 +47,7 @@ from .taxonomy import IGNORE_INDEX, NUM_FINE, fine_to_adl1, remap_raw_to_fine
 # torch is optional at import time: scripts/build_range_cache.py imports the scan-listing
 # helpers below and must run on a preprocessing box with no torch installed. The Dataset
 # classes raise a clear error if it is actually missing. Same guard style as perception/*'s
-# scipy fallbacks (see CLAUDE.md, Conventions).
+# scipy fallbacks (see docs/DEVELOPMENT.md, Conventions).
 try:
     import torch
     from torch.utils.data import Dataset as _TorchDataset
@@ -61,7 +61,7 @@ except ImportError:                                            # pragma: no cove
 
 
 # ── Layout of the real dataset ───────────────────────────────────────────────────────────────
-# The Ouster OS1-64 is the sensor this project targets (CLAUDE.md: Ouster OS1-64, ROS 2 Humble).
+# The Ouster OS1-64 is the sensor this project targets (docs/DEVELOPMENT.md: Ouster OS1-64, ROS 2 Humble).
 # RELLIS also ships a Velodyne cloud per frame under vel_cloud_node_kitti_bin; a recursive
 # "**/*.bin" glob sweeps both, doubling the frame count with clouds that have a different ring
 # count, a different FOV and NO matching .label directory. Restrict to the Ouster folder.

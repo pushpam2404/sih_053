@@ -298,6 +298,6 @@ $PY scripts/eval.py
 $PY scripts/kitti_replay.py --use-gt-labels
 ```
 
-All Python entry points need `.venv/bin/python` (see `CLAUDE.md` — the system `python3` is 3.14 and
-cannot load the compiled module). `cmake` is not installed on the dev host, hence the direct
-`clang++` lines.
+All Python entry points need the venv's python, since the compiled module only loads into the CPython
+it was built with (see `docs/DEVELOPMENT.md`). `cmake` was not installed on the dev host, hence the
+direct `clang++` lines.

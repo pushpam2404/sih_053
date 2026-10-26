@@ -93,7 +93,7 @@ def sample_scan(n_beams, n_cols, sx, sy, rng, canopy_hit_prob=0.85):
     z += rng.normal(0, 0.01, z.shape)
 
     # Ground-band returns get semantic label 0 (GROUND); everything else is UNKNOWN(6) — geometry-only
-    # pipeline, no claim of a segmentation network (see CLAUDE.md "Deep learning is deliberately parked").
+    # pipeline, no claim of a segmentation network (see docs/DEVELOPMENT.md "Semantic segmentation (built, not yet trained)").
     label = np.where(EL < -0.01, 0, 6).astype(np.float32)
     return np.stack([gx, gy, z, label], axis=1).astype(np.float32)
 
@@ -303,7 +303,7 @@ def main():
         "host_cpu": cpu,
         "host_platform": platform.platform(),
         "note": "Apple M4 laptop, single-threaded Python/pybind11 call path. No Jetson Orin numbers "
-                "exist for this project (CLAUDE.md: CUDA kernels never compiled with nvcc, no ROS run "
+                "exist for this project (docs/DEVELOPMENT.md: CUDA kernels never compiled with nvcc, no ROS run "
                 "on a vehicle) — do not extrapolate these numbers to Orin.",
         "scan_model": {
             "beams": n_beams, "azimuth_cols": n_cols, "raw_returns_per_sweep": raw_returns,

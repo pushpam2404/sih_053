@@ -1,6 +1,6 @@
-# CLAUDE.md
+# Development notes
 
-Guidance for Claude Code (claude.ai/code) when working in this repository.
+How the code is laid out, the invariants the engine relies on, and the commands used to test it.
 
 ## Project
 
@@ -8,32 +8,29 @@ Smart India Hackathon 2026 submission for DRDO problem ID26053: a **foveated (di
 
 The development host is macOS (Apple Silicon): **ROS 2, CUDA, TensorRT and CMake are not installed locally.** Only the C++ engine, the pybind11 module, the Python package, the dashboard and the host-side tests actually run here. ROS 2 code is compile-checked by review only, and the launch files carry `validate_launch_configuration()` helpers that run without ROS installed.
 
-`README.md` is the reviewer-facing document and states measured numbers with their sources. Everything it claims is reproducible by the tests below — keep it that way when changing the engine.
+`README.md` states measured numbers with their sources. Everything it claims should be reproducible with the commands below, so keep it that way when changing the engine.
 
-## Host toolchain (important)
+## Host toolchain
 
-- **Use `.venv/bin/python` for everything.** It is a 3.11 venv created with `--system-site-packages` from the uv interpreter below, so it inherits torch/numpy/scipy/sklearn/pybind11/onnx without re-downloading them and adds `pytest` + `onnxruntime` on top. It imports the tracked `lib/drdo_map*.so` fine, and torch reports **MPS available** (useful for smoke-testing the segmentation net; training happens on Colab).
-  ```bash
-  # recreate if lost — .venv is gitignored
-  /Users/pushpam/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/bin/python3 \
-      -m venv --system-site-packages .venv
-  .venv/bin/python -m pip install pytest onnxruntime
-  ```
-- `python3` on PATH is **3.14** with no torch/pybind11 and **cannot import the tracked `lib/drdo_map*.so`** (built for CPython 3.11). The bare uv interpreter at `/Users/pushpam/.local/share/uv/python/cpython-3.11.15-macos-aarch64-none/bin/python3` (what `pyrightconfig.json` and `.vscode/settings.json` point at) also works, but it is **externally managed** — installing into it fails with PEP 668, which is why the venv exists.
-- **`cmake` is not installed.** `CMakeLists.txt` is the Jetson/CI path; on this host build with the direct `clang++` lines below.
-- **`timeout(1)` does not exist** on this host — don't wrap commands in it.
+The numbers in this repo were measured on macOS (Apple Silicon). ROS 2, CUDA and TensorRT were never installed on that machine, so only the C++ engine, the pybind11 module, the Python package, the dashboard and the host-side tests were run there. ROS 2 code was checked by review only, and the launch files carry `validate_launch_configuration()` helpers that run without ROS.
+
+- Use a venv: `python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt && .venv/bin/python -m pip install -e .`
+- The pybind11 module in `lib/` is built for one CPython version. Rebuild it (command below) if you switch interpreters.
+- `CMakeLists.txt` is the Jetson / Linux path. On a machine without cmake, use the direct `clang++` / `g++` lines below.
+- CI (`.github/workflows/ci.yml`) runs the same commands on Ubuntu with g++.
 
 ## Commands
 
 ```bash
 PY=.venv/bin/python
 
-# C++ engine tests (no cmake on this host)
-clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_grid_engine.cpp -o /tmp/test_grid_engine && /tmp/test_grid_engine
-clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_engine_regression.cpp -o /tmp/test_engine_regression
-/tmp/test_engine_regression 11.1 300    # gates 1-7 + short drive; no args = full 3000-frame drive (~1.5 min)
+# C++ engine tests (direct compiler call, no cmake)
+mkdir -p build
+clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_grid_engine.cpp -o build/test_grid_engine && build/test_grid_engine
+clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_engine_regression.cpp -o build/test_engine_regression
+build/test_engine_regression 11.1 300    # gates 1-7 + short drive; no args = full 3000-frame drive (~1.5 min)
 
-# pybind11 module -> lib/ (where the tests and dashboard import it from)
+# pybind11 module -> lib/ (where the tests and dashboard import it from). macOS flags; on Linux drop `-undefined dynamic_lookup`.
 clang++ -O3 -std=c++17 -shared -fPIC -undefined dynamic_lookup $($PY -m pybind11 --includes) -Iinclude \
   src/drdo_map.cpp src/drdo_map_py.cpp -o lib/drdo_map$($PY -c "import sysconfig;print(sysconfig.get_config_var('EXT_SUFFIX'))")
 
@@ -63,7 +60,7 @@ $PY scripts/export_seg_onnx.py --checkpoint <ckpt> --out models/range_seg.onnx -
 $PY scripts/kitti_replay.py --model <ckpt|onnx>  # NON-UNKNOWN CELLS = labels that reached the C++ engine
 $PY scripts/kitti_replay.py --use-gt-labels      # baseline: exercises the map path without a checkpoint
 
-# With cmake available (Jetson / Linux CI): builds the lib, both tests, the pybind module, and CUDA if nvcc exists
+# With cmake available (Jetson / Linux): builds the lib, both tests, the pybind module, and CUDA if nvcc exists
 cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build   # then copy build/drdo_map*.so into lib/
 
 # ROS 2 (Linux / Jetson only)

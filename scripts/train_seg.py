@@ -68,7 +68,7 @@ def pick_device(explicit: Optional[str] = None) -> torch.device:
     """cuda -> mps -> cpu.
 
     mps is in the chain so the whole script (dataloader, loss, metrics, checkpointing) can be
-    smoke-tested on the macOS dev host described in CLAUDE.md before a Colab session is spent on
+    smoke-tested on the macOS dev host described in docs/DEVELOPMENT.md before a Colab session is spent on
     it. It is not a training target: no CUDA on this machine means no fp16 AMP and no
     channels_last, and a 64x1024 SalsaNext step is seconds, not milliseconds.
     """

@@ -1,7 +1,7 @@
 {
   "host_cpu": "Apple M4",
   "host_platform": "macOS-27.0-arm64-arm-64bit",
-  "note": "Apple M4 laptop, single-threaded Python/pybind11 call path. No Jetson Orin numbers exist for this project (CLAUDE.md: CUDA kernels never compiled with nvcc, no ROS run on a vehicle) \u2014 do not extrapolate these numbers to Orin.",
+  "note": "Apple M4 laptop, single-threaded Python/pybind11 call path. No Jetson Orin numbers exist for this project (docs/DEVELOPMENT.md: CUDA kernels never compiled with nvcc, no ROS run on a vehicle) \u2014 do not extrapolate these numbers to Orin.",
   "scan_model": {
     "beams": 64,
     "azimuth_cols": 1024,

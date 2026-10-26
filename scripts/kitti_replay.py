@@ -32,7 +32,7 @@ is reported.
 
 ── Honest scope ─────────────────────────────────────────────────────────────────────────────
 * No trained checkpoint ships in this repo (models/* are placeholders that score at chance —
-  CLAUDE.md). Without --model this script fails loudly rather than substituting a heuristic,
+  docs/DEVELOPMENT.md). Without --model this script fails loudly rather than substituting a heuristic,
   matching RangeSegmenter's own no-fallback policy.
 * `data/rellis` is synthetic: its labels are independent of geometry. A class histogram from it
   measures the plumbing, not accuracy. Accuracy is scripts/eval.py's job.

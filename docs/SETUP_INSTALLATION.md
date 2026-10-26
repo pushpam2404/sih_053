@@ -120,10 +120,8 @@ python3 tests/python/test_segmentation.py
 python3 tests/python/test_classify.py
 ```
 
-On the development Mac use `.venv/bin/python` in place of `python3` and create the
-environment with `--system-site-packages`; see `CLAUDE.md`, which records why (the
-system `python3` is 3.14 and cannot load the CPython 3.11 extension module, and the
-uv interpreter is externally managed so `pip install` into it fails with PEP 668).
+Use the venv's `.venv/bin/python` in place of `python3`. The compiled module in `lib/` only loads
+into the CPython version it was built with, so rebuild it after switching interpreters.
 
 Expected output:
 ```

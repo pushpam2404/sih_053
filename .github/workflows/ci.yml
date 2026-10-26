@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch keeps the download small; requirements.txt then sees it as satisfied
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements.txt
+          python -m pip install -e .
+
+      - name: C++ engine tests
+        run: |
+          mkdir -p build
+          g++ -std=c++17 -O3 -Wall -Wextra -Iinclude src/drdo_map.cpp tests/cpp/test_grid_engine.cpp -o build/test_grid_engine
+          g++ -std=c++17 -O3 -Wall -Wextra -Iinclude src/drdo_map.cpp tests/cpp/test_engine_regression.cpp -o build/test_engine_regression
+          build/test_grid_engine
+          build/test_engine_regression 11.1 300
+
+      - name: Build the pybind11 module
+        run: |
+          g++ -O3 -std=c++17 -shared -fPIC $(python -m pybind11 --includes) -Iinclude \
+            src/drdo_map.cpp src/drdo_map_py.cpp \
+            -o lib/drdo_map$(python -c "import sysconfig;print(sysconfig.get_config_var('EXT_SUFFIX'))")
+
+      - name: Python tests
+        run: |
+          # test_map_bridge passes with a warning if the module is missing, so check it loaded
+          python tests/python/test_map_bridge.py | tee bridge.log
+          grep -q "\[5/5\]" bridge.log
+          python -m pytest tests/python -q
+
+      - name: Regenerate the dashboard
+        run: python scripts/map_dashboard.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: map-dashboard
+          path: reports/map_dashboard.html

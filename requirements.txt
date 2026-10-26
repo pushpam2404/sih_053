@@ -1,18 +1,18 @@
 # Core Python Dependencies
-numpy>=1.22.0
-scipy>=1.8.0
-pyyaml>=6.0
-scikit-learn>=1.0.0
-torch>=2.0.0
+numpy>=1.22,<3
+scipy>=1.8,<2
+pyyaml>=6.0,<7
+scikit-learn>=1.0,<2
+torch>=2.0,<3
 
 # Pybind11 for C++ compilation
-pybind11>=2.10.0
+pybind11>=2.10,<4
 
 # Deployment & Serialization
-onnx>=1.14.0
+onnx>=1.14,<2
 # Runtime for the exported segmentation graph. Measured 11x faster than the PyTorch path on CPU
 # (39.7 vs 432 ms/scan incl. projection + kNN), so it is the deploy path, not an optional extra.
-onnxruntime>=1.16.0
+onnxruntime>=1.16,<2
 
 # Testing & Quality
-pytest>=7.0.0
+pytest>=7.0,<10

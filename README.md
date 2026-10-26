@@ -1,5 +1,6 @@
 # DRDO ID26053: Adaptive Variable-Resolution 2.5D LiDAR Mapping for Dynamic Environments
 
+[![CI](https://github.com/pushpam2404/sih_053/actions/workflows/ci.yml/badge.svg)](https://github.com/pushpam2404/sih_053/actions/workflows/ci.yml)
 [![ROS 2 Humble](https://img.shields.io/badge/ROS%202-Humble-blue.svg)](https://docs.ros.org/en/humble/)
 [![Target Hardware](https://img.shields.io/badge/Target-NVIDIA%20Jetson%20AGX%20Orin-green.svg)](https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/)
 [![C++ Standard](https://img.shields.io/badge/C%2B%2B-17-brightgreen.svg)](https://en.cppreference.com/w/cpp/17)
@@ -7,8 +8,12 @@
 
 Smart India Hackathon 2026 · DRDO · Smart Vehicles. Target platform: **NVIDIA Jetson AGX Orin** + **Ouster OS1-64**, ROS 2 Humble.
 
-**Demo:** open [`reports/map_dashboard.html`](reports/map_dashboard.html) in a browser (regenerate with `.venv/bin/python scripts/map_dashboard.py`).
+**Demo:** the offline dashboard is generated, not stored in the repo. Build the engine module (section 7), run `.venv/bin/python scripts/map_dashboard.py` (about 15 s) and open `reports/map_dashboard.html`. CI also uploads a fresh copy as a build artifact on every push.
 **All measured numbers with methodology:** [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+
+![Dashboard at 1440 px: KPI row, layer buttons, near-field, band-edge zoom and far-field views](docs/screenshots/dashboard-1440.png)
+
+<img src="docs/screenshots/dashboard-390.png" alt="Dashboard at 390 px wide" width="260">
 
 ---
 
@@ -23,8 +28,6 @@ That means, concretely:
 - No accuracy claim is made against real field data.
 
 The architecture targets the Orin and the deployment path is built out (CUDA port, TensorRT script, Docker image). Treat every Orin statement here as an **intention, not a measurement**. [`docs/JETSON_DEPLOYMENT.md`](docs/JETSON_DEPLOYMENT.md) lists the first measurements to take when a board is available.
-
-We would rather hand a reviewer numbers that are smaller and true than numbers that are larger and unverifiable.
 
 ## 1. The problem in one paragraph
 
@@ -73,7 +76,7 @@ Apple M4, single CPU thread, synthetic OS1-64 scans. Full methodology in [`docs/
 | Rasterise to OccupancyGrid *(Python approximation)* | 27.1 | 29.4 |
 | **Total** | **51.8** | **60.2** |
 
-**19.3 Hz; the 10 Hz sensor budget is cleared on mean, p95 and max.** The rasterise row is a Python stand-in for the compiled C++ publish pass and is over half the budget — real throughput is likely better, but the compiled node has not been profiled so we do not claim it.
+**19.3 Hz; the 10 Hz sensor budget is cleared on mean, p95 and max.** A re-run during the repo cleanup, on a busier machine, gave 60.0 ms mean / 82.7 ms p95 (16.7 Hz) with max 220 ms, so the mean and p95 still clear the budget and the max does not on that run. Expect run-to-run noise. The rasterise row is a Python stand-in for the compiled C++ publish pass and is over half the budget — real throughput is likely better, but the compiled node has not been profiled so we do not claim it.
 
 ### Memory
 
@@ -157,16 +160,17 @@ If a stage has no pose it passes scans through unfiltered, so the map never star
 ## 7. Quick start (laptop, no ROS needed)
 
 ```bash
-# .venv inherits torch/numpy/scipy from the system interpreter and adds pytest + onnxruntime
-python3 -m venv --system-site-packages .venv && .venv/bin/python -m pip install pytest onnxruntime
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt   # pulls in torch, a large download
 .venv/bin/python -m pip install -e .
 
 # C++ engine (cmake is optional; these lines always work)
-clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_grid_engine.cpp -o /tmp/ge && /tmp/ge
-clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_engine_regression.cpp -o /tmp/reg
-/tmp/reg 11.1 300        # gates + short drive; no args = full 3.3 km (~1.5 min)
+mkdir -p build
+clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_grid_engine.cpp -o build/ge && build/ge
+clang++ -std=c++17 -O3 -Iinclude src/drdo_map.cpp tests/cpp/test_engine_regression.cpp -o build/reg
+build/reg 11.1 300       # gates + short drive; no args = full 3.3 km (~1.5 min)
 
-# Python module used by the dashboard and the bridge test
+# Python module used by the dashboard and the bridge test (macOS flags; on Linux use g++ and drop -undefined dynamic_lookup)
 clang++ -O3 -std=c++17 -shared -fPIC -undefined dynamic_lookup \
   $(.venv/bin/python -m pybind11 --includes) -Iinclude src/drdo_map.cpp src/drdo_map_py.cpp \
   -o lib/drdo_map$(.venv/bin/python -c "import sysconfig;print(sysconfig.get_config_var('EXT_SUFFIX'))")
@@ -227,3 +231,11 @@ docs/PERFORMANCE.md                     every measured number, with methodology
 5. **Harder classification evidence** — a scene with off-nominal object sizes and edge-on vehicles, to replace an accuracy number that the current scene makes too easy.
 
 Developed for the **Smart India Hackathon 2026, DRDO Problem ID 26053**.
+
+## Tests and CI
+
+`.github/workflows/ci.yml` builds the engine with g++ on Ubuntu, runs both C++ test programs, builds the pybind11 module, runs the Python suites and regenerates the dashboard. The CMake build is not exercised by CI. It has not been run on any machine yet (cmake was not installed on the dev host).
+
+## License
+
+Apache 2.0, see [LICENSE](LICENSE).

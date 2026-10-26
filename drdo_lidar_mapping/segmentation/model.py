@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 # NUM_FINE is the ONLY thing this module is allowed to know about labels. taxonomy.py is
-# the single source of truth (CLAUDE.md); a hardcoded 12 here would be a second mapping.
+# the single source of truth (docs/DEVELOPMENT.md); a hardcoded 12 here would be a second mapping.
 from .taxonomy import NUM_FINE
 
 class MinkUNet18Scaffold(nn.Module):
@@ -87,7 +87,7 @@ def load_legacy_mlp(weights_path: str, in_channels: int = 4, num_classes: int = 
 #   - torchsparse / MinkowskiEngine build against a specific CUDA + PyTorch pair. On Colab that
 #     pair moves under you between sessions, and on this Apple Silicon host they do not build at
 #     all. build_minkunet() above has silently fallen back to a 3-layer MLP on every machine
-#     this project has ever run on (see CLAUDE.md, "Deep learning is deliberately parked").
+#     this project has ever run on (see docs/DEVELOPMENT.md, "Semantic segmentation (built, not yet trained)").
 #   - Sparse convolutions have no usable ONNX representation. deploy/ and scripts/export_onnx.py
 #     exist to produce a TensorRT engine for the Orin; a network that cannot be exported makes
 #     that whole path decorative. SalsaNext-Lite is Conv2d / BatchNorm / LeakyReLU /

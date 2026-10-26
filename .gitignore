@@ -32,6 +32,7 @@ Makefile
 .ninja_*
 compile_commands.json
 compile_flags.txt
+.clangd
 .clangd/
 
 # --- Python Environment & Bytecode ---
@@ -78,10 +79,8 @@ log/
 colcon.meta
 
 # --- IDEs & Editors ---
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
+.vscode/
+pyrightconfig.json
 .idea/
 *.sublime-project
 *.sublime-workspace
@@ -126,8 +125,10 @@ goose/
 # are small, derived from the training split, and are the provenance for how a model was trained.
 # A checkpoint without them cannot be deployed correctly.
 
-# --- Local Agent Workspace & Internal Cache ---
-.agents/
+# --- Generated demo output (python scripts/map_dashboard.py, ~8 MB) ---
+reports/map_dashboard.html
+
+# --- Local scratch ---
 .cache/
 archive/
 
