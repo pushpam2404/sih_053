@@ -475,18 +475,18 @@ def main():
 HTML = r"""<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ID26053 Foveated Map Dashboard</title>
 <style>
-:root{--bg:#0f1318;--panel:#171d24;--line:#2a333d;--fg:#dde3ea;--mute:#8a96a3;--acc:#f2b84b}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,sans-serif;padding:16px}
-h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;margin:0 0 8px;color:var(--mute);text-transform:uppercase;letter-spacing:.06em}
-.sub{color:var(--mute);margin-bottom:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:12px}
-.kpi{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px}.kpi b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
-.kpi span{color:var(--mute);font-size:12px}.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
-button{background:#222b35;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;cursor:pointer}
-button.on{border-color:var(--acc);color:var(--acc)}input[type=range]{flex:1;min-width:160px}
+:root{--bg:#0b0d12;--panel:#11141b;--line:rgba(238,240,245,.08);--fg:#eef0f5;--mute:#8d95a8;--acc:#f2b84b;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,sans-serif;padding:24px;-webkit-font-smoothing:antialiased}
+h1{font-size:22px;font-weight:500;margin:0 0 4px;letter-spacing:-.01em}h2{font-size:14px;font-weight:500;margin:0 0 12px;color:var(--fg)}
+.sub{color:var(--mute);margin-bottom:20px;font-family:var(--mono);font-size:12px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;min-width:0}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:16px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px}.kpi b{display:block;font:400 24px/1.2 var(--mono);font-variant-numeric:tabular-nums;margin-bottom:4px}
+.kpi span{color:var(--mute);font-size:12px}.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 16px}#flabel{font:12px var(--mono);color:var(--mute)}
+button{background:#1a1e28;color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:0 12px;height:32px;cursor:pointer;font:inherit;font-size:13px;transition:background-color .15s cubic-bezier(.22,1,.36,1),border-color .15s cubic-bezier(.22,1,.36,1)}button:hover{background:#222734}button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+button.on{background:#232838;border-color:rgba(242,184,75,.5);color:var(--fg);box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}input[type=range]{flex:1;min-width:160px;accent-color:var(--acc)}
 .view{position:relative;width:100%;aspect-ratio:1;max-width:100%}.view img,.view canvas{position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated}
-table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:right}td:first-child,th:first-child{text-align:left}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;font-family:var(--mono);font-size:12px}th{color:var(--mute);font-weight:400}td:first-child,th:first-child{text-align:left}
 .legend{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;color:var(--mute)}.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 @media (min-width:1000px){.wide{grid-column:span 2}}
 .bar{height:14px;background:var(--acc);border-radius:3px}.note{color:var(--mute);font-size:12px;margin-top:8px}
@@ -529,8 +529,9 @@ document.getElementById('mem').innerHTML='<table>'+Object.entries(m).map(([k,v])
 document.getElementById('lat').innerHTML='<tr><th>stage</th><th>mean</th><th>p95</th><th>max</th></tr>'+Object.entries(lat).map(([k,v])=>`<tr><td>${k.replace('_ms','')}</td><td>${fmt(v.mean,2)}</td><td>${fmt(v.p95,2)}</td><td>${fmt(v.max,2)}</td></tr>`).join('');
 document.getElementById('latnote').textContent='Timed around the Python→C++ calls, so insert includes the numpy transfer. Perception is Python/scikit-learn.';
 document.getElementById('dyn').innerHTML='<tr><th>range</th><th>object-frames</th><th>recall</th></tr>'+S.dynamic_recall_by_range.map(r=>`<tr><td>${r.range}</td><td>${r.frames}</td><td>${r.recall==null?'n/a':fmt(100*r.recall,0)+'%'}</td></tr>`).join('')+`<tr><td>static objects reported moving</td><td>${S.false_dynamic_track_frames} / ${S.dynamic_track_frames}</td><td>object-frames</td></tr>`+Object.entries(S.confirm_delay_s).map(([k,v])=>`<tr><td>time to confirm: ${k}</td><td></td><td>${fmt(v,1)} s</td></tr>`).join('');
-document.getElementById('legend').innerHTML=S.classes.map(c=>`<span><i class="sw" style="background:rgb(${c.rgb})"></i>${c.name}</span>`).join('')+'<span><i class="sw" style="background:#2d343e"></i>FREE (carved)</span><br><b style="color:var(--fg);font-weight:600">Terrain view:</b> <span><i class="sw" style="background:rgb(76,170,84)"></i>flat</span><span><i class="sw" style="background:rgb(232,170,40)"></i>rough</span><span><i class="sw" style="background:rgb(225,40,40)"></i>blocked</span><span><i class="sw" style="background:rgb(60,160,170)"></i>overhang</span><span><i class="sw" style="background:rgb(60,120,225)"></i>water/mud</span><span><i class="sw" style="background:rgb(38,72,52)"></i>free</span><span><i class="sw" style="background:rgb(120,0,55)"></i>negative obstacle (if engine reports flag 3)</span>';
-document.getElementById('objlegend').innerHTML='<b style="color:var(--fg);font-weight:600">Object class (confirmed movers only):</b> '+S.obj_classes.map(c=>`<span><i class="sw" style="background:rgb(${c.rgb})"></i>${c.name}</span>`).join('')+' <span>· yellow ring = ground truth mover (toggle above)</span>';
+const nice=n=>{const t=String(n).toLowerCase().replace(/_/g,' ');return t.charAt(0).toUpperCase()+t.slice(1)};
+document.getElementById('legend').innerHTML=S.classes.map(c=>`<span><i class="sw" style="background:rgb(${c.rgb})"></i>${nice(c.name)}</span>`).join('')+'<span><i class="sw" style="background:#2d343e"></i>Free (carved)</span><br><b style="color:var(--fg);font-weight:600">Terrain view:</b> <span><i class="sw" style="background:rgb(76,170,84)"></i>flat</span><span><i class="sw" style="background:rgb(232,170,40)"></i>rough</span><span><i class="sw" style="background:rgb(225,40,40)"></i>blocked</span><span><i class="sw" style="background:rgb(60,160,170)"></i>overhang</span><span><i class="sw" style="background:rgb(60,120,225)"></i>water/mud</span><span><i class="sw" style="background:rgb(38,72,52)"></i>free</span><span><i class="sw" style="background:rgb(120,0,55)"></i>negative obstacle (if engine reports flag 3)</span>';
+document.getElementById('objlegend').innerHTML='<b style="color:var(--fg);font-weight:600">Object class (confirmed movers only):</b> '+S.obj_classes.map(c=>`<span><i class="sw" style="background:rgb(${c.rgb})"></i>${nice(c.name)}</span>`).join('')+' <span>· yellow ring = ground truth mover (toggle above)</span>';
 const hashIdx=parseInt((location.hash.match(/snap=(\d+)/)||[])[1]); if(hashIdx>=0&&hashIdx<snaps.length) idx=hashIdx;
 const slider=document.getElementById('slider'); slider.max=snaps.length-1; slider.value=idx;
 let showTruth=false;
